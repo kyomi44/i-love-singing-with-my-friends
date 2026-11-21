@@ -1,0 +1,25 @@
+# python
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+dist/
+build/
+
+# local config / secrets
+.env
+deepcuts.toml
+
+# media & song folders if you point the library inside the repo
+library/
+*.wav
+*.flac
+*.mp3
+*.m4a
+*.mp4
+*.ckpt
+*.onnx
+
+.DS_Store

@@ -1,0 +1,279 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>deepcuts · timing editor</title>
+<link rel="icon" href="data:,">
+<style>
+  :root {
+    --bg: #101014; --panel: #16161c; --line: #262630; --fg: #ececf1; --muted: #8a8a98;
+    --sung: #4fc3f7; --unsung: #ffffff; --warn: #f87171; --accent: #facc15;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    background: var(--bg); color: var(--fg);
+    font: 14px/1.45 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+    display: grid; grid-template-columns: minmax(0, 1fr) 380px; grid-template-rows: auto 1fr auto;
+  }
+  header { grid-column: 1 / -1; display: flex; gap: 16px; align-items: baseline; padding: 12px 20px; border-bottom: 1px solid var(--line); }
+  header h1 { font-size: 15px; margin: 0; font-weight: 600; }
+  header .sub { color: var(--muted); }
+  #stage { position: relative; display: flex; flex-direction: column; justify-content: center; align-items: center; gap: .3em; padding: 24px; overflow: hidden; }
+  .row {
+    min-height: 1.3em; font-size: clamp(22px, 3.6vw, 54px); font-weight: 800; text-align: center; white-space: nowrap;
+    filter: drop-shadow(0 0 2px #000) drop-shadow(0 3px 0 rgba(0, 0, 0, .85));
+  }
+  .w {
+    background-image: linear-gradient(90deg, var(--c, var(--sung)) var(--p, 0%), var(--unsung) var(--p, 0%));
+    -webkit-background-clip: text; background-clip: text; color: transparent;
+  }
+  #countdown { color: var(--sung); font-size: 26px; height: 1.3em; letter-spacing: .35em; }
+  #scrub { position: absolute; left: 0; right: 0; bottom: 0; height: 5px; background: var(--line); cursor: pointer; }
+  #scrub i { display: block; height: 100%; width: 0; background: var(--sung); }
+  aside { grid-column: 2; grid-row: 2 / 4; border-left: 1px solid var(--line); background: var(--panel); overflow-y: auto; }
+  ol { list-style: none; margin: 0; padding: 0; }
+  li { display: grid; grid-template-columns: 62px 1fr auto; gap: 8px; align-items: baseline; padding: 6px 12px; border-bottom: 1px solid var(--line); cursor: pointer; }
+  li .t, li .m { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+  li .x { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  li.low .x::before { content: "●"; color: var(--warn); margin-right: 6px; font-size: 10px; }
+  li.sel { background: #22222c; box-shadow: inset 3px 0 0 var(--accent); }
+  li.now .x { color: var(--sung); }
+  footer { grid-column: 1; display: flex; flex-wrap: wrap; gap: 6px 18px; padding: 10px 20px; border-top: 1px solid var(--line); color: var(--muted); font-size: 12px; }
+  footer b { color: var(--fg); font-weight: 600; font-variant-numeric: tabular-nums; }
+  kbd { font: 11px ui-monospace, monospace; color: var(--fg); border: 1px solid #3a3a46; border-bottom-width: 2px; border-radius: 4px; padding: 0 4px; }
+  #msg { margin-left: auto; color: var(--accent); }
+</style>
+</head>
+<body>
+<header><h1 id="title">deepcuts</h1><span class="sub" id="sub">loading…</span></header>
+<main id="stage">
+  <div id="countdown"></div>
+  <div class="row" id="row0"></div>
+  <div class="row" id="row1"></div>
+  <div id="scrub"><i></i></div>
+</main>
+<aside><ol id="list"></ol></aside>
+<footer>
+  <span><b id="time">0:00.00</b></span>
+  <span>global <b id="gofs">+0 ms</b></span>
+  <span>line <b id="lofs">#1 +0 ms</b></span>
+  <span>guide vox <b id="gv">off</b></span>
+  <span><kbd>space</kbd> play <kbd>←</kbd><kbd>→</kbd> seek <kbd>↑</kbd><kbd>↓</kbd> pick line <kbd>⏎</kbd> replay line</span>
+  <span><kbd>[</kbd><kbd>]</kbd> global ±10ms <kbd>,</kbd><kbd>.</kbd> line ±20ms <kbd>⇧</kbd> ×5 <kbd>T</kbd> tap line start <kbd>0</kbd> reset line</span>
+  <span><kbd>V</kbd> guide vocals <kbd>S</kbd> save <kbd>R</kbd> save + render video</span>
+  <span id="msg"></span>
+</footer>
+<script>
+"use strict";
+const $ = (s) => document.querySelector(s);
+const bufs = {};
+const rowEls = [$("#row0"), $("#row1")];
+const rowLine = [-1, -1];
+let song, lines, ov, ctx, sched;
+let nodes = [], vocalsGain = null, playing = false, startAt = 0, pausedAt = 0;
+let sel = 0, guide = 0, dirty = false;
+
+const fmt = (t) => { t = Math.max(0, t); const m = Math.floor(t / 60); return `${m}:${(t - m * 60).toFixed(2).padStart(5, "0")}`; };
+const sign = (ms) => `${ms >= 0 ? "+" : ""}${ms} ms`;
+const msg = (s) => { $("#msg").textContent = s; };
+// <layout> (extracted by tests/test_editor_parity.py)
+const lead = () => (song.render.highlight_lead_ms || 0) / 1000;
+const shift = (i) => (ov.global_offset_ms + (ov.line_shift_ms[i] || 0)) / 1000;
+function span(i) {
+  const w = lines[i].words, s = shift(i) - lead();
+  return [w[0].start + s, w[w.length - 1].end + s];
+}
+
+// Mirrors stages/render/layout.py::schedule so the preview matches the video.
+function schedule() {
+  const L = song.render.lead_in, H = song.render.hold, n = lines.length;
+  const spans = lines.map((_, i) => span(i));
+  const rows = [], appear = [], fresh = [], last = [null, null];
+  for (let i = 0; i < n; i++) {
+    const s = spans[i][0], desired = s - L;
+    const f = i === 0 || spans[i - 1][1] + H <= desired;
+    const row = f ? 0 : 1 - rows[i - 1];
+    let a = desired;
+    if (last[row] !== null) a = Math.max(a, spans[last[row]][1] + 0.05);
+    appear.push(Math.max(0, Math.min(a, s))); rows.push(row); fresh.push(f); last[row] = i;
+  }
+  const disappear = spans.map(([, e], i) => {
+    let d = e + H;
+    for (let j = i + 1; j < n; j++) if (rows[j] === rows[i]) { d = Math.min(d, appear[j]); break; }
+    return Math.max(d, e);
+  });
+  sched = { spans, rows, appear, disappear, fresh };
+}
+// </layout>
+
+function buildList() {
+  const ol = $("#list");
+  ol.innerHTML = "";
+  lines.forEach((l, i) => {
+    const li = document.createElement("li");
+    const conf = l.words.reduce((a, w) => a + (w.confidence ?? 0), 0) / l.words.length;
+    if (conf < song.low_confidence) li.classList.add("low");
+    li.innerHTML = `<span class="t"></span><span class="x"></span><span class="m"></span>`;
+    li.querySelector(".x").textContent = (l.singer ? `@${l.singer} ` : "") + l.words.map((w) => w.text).join(" ");
+    li.title = `aligner confidence ${(conf * 100).toFixed(0)}%`;
+    li.onclick = () => { select(i); seek(span(i)[0] - 1.5); };
+    ol.appendChild(li);
+  });
+  refreshList();
+}
+function refreshList() {
+  [...$("#list").children].forEach((li, i) => {
+    li.querySelector(".t").textContent = fmt(span(i)[0]);
+    const sh = ov.line_shift_ms[i] || 0;
+    li.querySelector(".m").textContent = sh ? sign(sh) : "";
+    li.classList.toggle("sel", i === sel);
+  });
+}
+function select(i) {
+  sel = Math.max(0, Math.min(lines.length - 1, i));
+  refreshList();
+  $("#list").children[sel]?.scrollIntoView({ block: "nearest" });
+}
+function changed() {
+  dirty = true; schedule(); refreshList(); rowLine[0] = rowLine[1] = -1; msg("unsaved changes (S to save)");
+}
+
+// ---- audio (Web Audio keeps the guide vocal sample-locked to the track) ----
+const now = () => (playing ? ctx.currentTime - startAt : pausedAt);
+function stopNodes() { nodes.forEach((n) => { try { n.stop(); } catch (_) { /* already stopped */ } }); nodes = []; }
+function play(at) {
+  if (ctx.state === "suspended") ctx.resume();
+  stopNodes();
+  const t = Math.max(0, at ?? now()), when = ctx.currentTime + 0.05;
+  const src = ctx.createBufferSource();
+  src.buffer = bufs.track; src.connect(ctx.destination); src.start(when, t); nodes.push(src);
+  if (bufs.vocals) {
+    const v = ctx.createBufferSource();
+    v.buffer = bufs.vocals; vocalsGain = ctx.createGain(); vocalsGain.gain.value = guide;
+    v.connect(vocalsGain).connect(ctx.destination); v.start(when, t); nodes.push(v);
+  }
+  startAt = when - t; playing = true;
+}
+function pause() { pausedAt = now(); stopNodes(); playing = false; }
+function seek(t) {
+  t = Math.max(0, Math.min(t, bufs.track ? bufs.track.duration : 0));
+  if (playing) play(t); else pausedAt = t;
+}
+
+// ---- drawing ----
+function fillRow(r, i) {
+  const el = rowEls[r];
+  el.innerHTML = ""; rowLine[r] = i;
+  if (i < 0) return;
+  const l = lines[i];
+  el.style.setProperty("--c", (l.singer && song.render.singer_colors[l.singer]) || song.render.sung_color);
+  l.words.forEach((w, k) => {
+    const s = document.createElement("span");
+    s.className = "w"; s.textContent = w.text + (k < l.words.length - 1 ? " " : "");
+    el.appendChild(s);
+  });
+}
+function tick() {
+  const t = now();
+  $("#time").textContent = fmt(t);
+  $("#scrub i").style.width = `${(100 * t) / bufs.track.duration}%`;
+  let current = -1;
+  for (let r = 0; r < 2; r++) {
+    let idx = -1;
+    for (let i = 0; i < lines.length; i++) {
+      if (sched.rows[i] === r && sched.appear[i] <= t && t < sched.disappear[i]) { idx = i; break; }
+    }
+    if (idx !== rowLine[r]) fillRow(r, idx);
+    if (idx < 0) continue;
+    const s = shift(idx) - lead();
+    [...rowEls[r].children].forEach((el, k) => {
+      const w = lines[idx].words[k], a = w.start + s, b = w.end + s;
+      el.style.setProperty("--p", `${t <= a ? 0 : t >= b ? 100 : (100 * (t - a)) / (b - a)}%`);
+    });
+    if (sched.spans[idx][0] <= t && t <= sched.spans[idx][1]) current = idx;
+  }
+  let cd = "";
+  for (let i = 0; i < lines.length; i++) {
+    if (!sched.fresh[i]) continue;
+    const s = sched.spans[i][0], dt = s - t, prevEnd = i ? sched.spans[i - 1][1] : 0;
+    const wanted = s - prevEnd >= song.render.countdown_gap || (i === 0 && s >= 4);
+    if (wanted && dt > 0 && dt <= 3 && t >= prevEnd + 0.3) { cd = Array(Math.ceil(dt)).fill("●").join(" "); break; }
+  }
+  $("#countdown").textContent = cd;
+  [...$("#list").children].forEach((li, i) => li.classList.toggle("now", i === current));
+  $("#gofs").textContent = sign(ov.global_offset_ms);
+  $("#lofs").textContent = `#${sel + 1} ${sign(ov.line_shift_ms[sel] || 0)}`;
+  $("#gv").textContent = guide > 0 ? `${Math.round(guide * 100)}%` : "off";
+  requestAnimationFrame(tick);
+}
+
+// ---- persistence ----
+async function save() {
+  const r = await fetch("/api/overrides", { method: "POST", body: JSON.stringify(ov) });
+  if (r.ok) { dirty = false; msg("saved to overrides.json"); } else msg("save failed");
+}
+async function renderVideo() {
+  await save();
+  msg("rendering… (a minute or so)");
+  const r = await (await fetch("/api/render", { method: "POST" })).json();
+  msg(r.ok ? `rendered → ${r.output.split("/").pop()}` : `render failed: ${r.error}`);
+}
+
+function bump(i, ms) {
+  ov.line_shift_ms[i] = (ov.line_shift_ms[i] || 0) + ms;
+  if (!ov.line_shift_ms[i]) delete ov.line_shift_ms[i];
+  changed();
+}
+document.addEventListener("keydown", (e) => {
+  if (!bufs.track) return;
+  if (e.metaKey || e.ctrlKey) { if (e.key === "s") { e.preventDefault(); save(); } return; }
+  const k = e.shiftKey ? 5 : 1;
+  switch (e.code) {
+    case "Space": e.preventDefault(); playing ? pause() : play(); break;
+    case "ArrowLeft": seek(now() - 5); break;
+    case "ArrowRight": seek(now() + 5); break;
+    case "ArrowUp": e.preventDefault(); select(sel - 1); break;
+    case "ArrowDown": e.preventDefault(); select(sel + 1); break;
+    case "Enter": seek(span(sel)[0] - 1.5); if (!playing) play(); break;
+    case "BracketLeft": ov.global_offset_ms -= 10 * k; changed(); break;
+    case "BracketRight": ov.global_offset_ms += 10 * k; changed(); break;
+    case "Comma": bump(sel, -20 * k); break;
+    case "Period": bump(sel, 20 * k); break;
+    case "Digit0": delete ov.line_shift_ms[sel]; changed(); break;
+    case "KeyT": bump(sel, Math.round((now() - span(sel)[0]) * 1000)); select(sel + 1); break;
+    case "KeyV": guide = guide > 0 ? 0 : 0.3; if (vocalsGain) vocalsGain.gain.value = guide; break;
+    case "KeyS": save(); break;
+    case "KeyR": renderVideo(); break;
+  }
+});
+$("#scrub").addEventListener("click", (e) => seek((e.offsetX / e.currentTarget.clientWidth) * bufs.track.duration));
+window.addEventListener("beforeunload", (e) => { if (dirty) e.preventDefault(); });
+
+async function main() {
+  song = await (await fetch("/api/song")).json();
+  lines = song.lines;
+  ov = song.overrides;
+  ov.line_shift_ms = ov.line_shift_ms || {};
+  const root = document.documentElement.style;
+  root.setProperty("--sung", song.render.sung_color);
+  root.setProperty("--unsung", song.render.unsung_color);
+  $("#title").textContent = `${song.meta.artist} — ${song.meta.title}`;
+  document.title = `${song.meta.artist} — ${song.meta.title} · deepcuts`;
+  schedule();
+  buildList();
+  ctx = new AudioContext();
+  const load = async (u) => ctx.decodeAudioData(await (await fetch(u)).arrayBuffer());
+  $("#sub").textContent = "loading audio…";
+  bufs.track = await load(song.audio.track);
+  if (song.audio.vocals) bufs.vocals = await load(song.audio.vocals);
+  const deep = /t=([\d.]+)/.exec(location.hash);  // e.g. http://localhost:8765/#t=83.5
+  if (deep) pausedAt = parseFloat(deep[1]);
+  $("#sub").textContent = `${lines.length} lines · red dots = low aligner confidence · space to play`;
+  requestAnimationFrame(tick);
+}
+main().catch((e) => { $("#sub").textContent = `error: ${e}`; });
+</script>
+</body>
+</html>

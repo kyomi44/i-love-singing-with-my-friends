@@ -1,0 +1,67 @@
+[project]
+name = "deepcuts"
+version = "0.1.0"
+description = "Karaoke for deep cuts: any track -> SOTA stem separation + word-accurate lyric timing -> karaoke video."
+readme = "README.md"
+requires-python = ">=3.11,<3.14"
+license = "MIT"
+authors = [{ name = "deepcuts contributors" }]
+keywords = ["karaoke", "stem-separation", "forced-alignment", "lyrics", "roformer"]
+dependencies = [
+  "typer>=0.12",
+  "rich>=13",
+  "pydantic>=2.6",
+  "httpx>=0.27",
+]
+
+[project.optional-dependencies]
+# Local stem separation (BS-/Mel-RoFormer, MDX, Demucs) via python-audio-separator.
+# GPU users: install "audio-separator[gpu]" instead (see README).
+separate = ["audio-separator>=0.30"]
+# Default aligner: MMS CTC forced alignment of *known* lyrics against the vocal stem.
+align = [
+  "torch>=2.3",
+  "ctc-forced-aligner @ git+https://github.com/MahmoudAshraf97/ctc-forced-aligner.git",
+]
+# Duet / call-and-response singer detection (experimental on singing).
+diarize = ["pyannote.audio>=4.0"]
+# Pull audio from a URL (Bandcamp, YouTube, SoundCloud...).
+download = ["yt-dlp"]
+# Extra lyric providers (Musixmatch, NetEase, ...) on top of the built-in LRCLIB client.
+lyrics = ["syncedlyrics>=1.0"]
+all = ["deepcuts[separate,align,diarize,download,lyrics]"]
+dev = ["pytest>=8", "ruff>=0.6"]
+# WhisperX (ASR fallback + alternative aligner) is deliberately NOT an extra: it pins an older
+# PyTorch, which would hold audio-separator back several releases for everyone. See README.
+
+[project.scripts]
+deepcuts = "deepcuts.cli:run"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.metadata]
+allow-direct-references = true
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/deepcuts"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+ignore = [
+  "B008",  # typer uses function calls in defaults
+  "E501",  # formatter owns line length; long strings (ASS header) are fine
+]
+
+[tool.ruff.lint.per-file-ignores]
+"src/deepcuts/cli.py" = ["B006"]  # typer list options default to []
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"

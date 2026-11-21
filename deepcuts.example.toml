@@ -1,0 +1,85 @@
+# deepcuts configuration. Copy to ./deepcuts.toml or ~/.config/deepcuts/config.toml.
+# Every key is optional; these are the defaults.
+
+library = "~/deepcuts"   # one folder per song lives here
+language = "eng"         # ISO 639-3 default for new songs (per-song: edit meta.json)
+
+[separation]
+backend = "local"        # "local" (audio-separator) or "mvsep" (remote, needs MVSEP_API_TOKEN)
+vocal_model = "vocals_mel_band_roformer.ckpt"   # `audio-separator --list_models` for others
+karaoke_models = [       # lead/backing split, tried in order until one loads
+  "mel_band_roformer_karaoke_becruily.ckpt",
+  "mel_band_roformer_karaoke_gabox.ckpt",
+  "mel_band_roformer_karaoke_aufr33_viperx_sdr_10.1956.ckpt",
+]
+backing = "keep"         # "keep" harmonies in the karaoke track, or "remove"
+model_dir = "~/.cache/deepcuts/models"
+# overlap = 2            # RoFormer overlap: 2 = faster, 8 = best seams
+
+[mvsep]
+api_token_env = "MVSEP_API_TOKEN"
+vocals_sep_type = 40     # BS Roformer (vocals, instrumental)
+vocals_add_opt1 = "81"   # model version; `deepcuts mvsep-algorithms roformer` lists newer ones
+karaoke_sep_type = 49    # MVSep Karaoke (lead/back vocals)
+karaoke_add_opt1 = "6"
+output_format = 2        # 1 = wav16, 2 = flac16, 4 = wav32
+poll_seconds = 5.0
+timeout_minutes = 30.0
+
+[lyrics]
+sources = ["lrclib", "syncedlyrics"]
+syncedlyrics_providers = ["Lrclib", "Musixmatch", "NetEase", "Megalobiz"]
+duration_tolerance = 3.0 # seconds of slack when matching LRCLIB entries to your file
+asr_fallback = false     # transcribe the vocal stem if nothing is found (needs whisperx)
+asr_model = "large-v3"
+
+[align]
+aligner = "ctc"          # "ctc" (MMS forced alignment) or "whisperx" (needs synced lyrics)
+stem = "vocals"          # "vocals" (lead+backing) or "lead" (cleaner, but misses backing lines)
+strategy = "auto"        # "auto" | "global" | "anchored"
+device = "auto"          # "auto" | "cuda" | "mps" | "cpu"
+batch_size = 8
+# ctc_model = "MahmoudAshraf/mms-300m-1130-forced-aligner"
+window_pad_before = 0.6
+window_pad_after = 1.0
+min_word_dur = 0.08
+max_word_dur = 6.0
+gap_close = 0.35         # close gaps shorter than this inside a line (smooth wipes)
+low_confidence = 0.35    # lines below this are flagged in `report` and the editor
+
+[diarize]
+enabled = false
+model = "pyannote/speaker-diarization-community-1"
+hf_token_env = "HF_TOKEN"
+num_speakers = 2
+both_ratio = 0.35        # 2nd singer covering >= 35% of a line -> "AB"
+
+[render]
+video = true
+width = 1920
+height = 1080
+fps = 30
+font = "Arial"           # any installed font; or point fonts_dir at a folder of .ttf/.otf
+# fonts_dir = "~/fonts"
+font_size = 76
+bold = true
+outline = 4.0
+sung_color = "#4FC3F7"
+unsung_color = "#FFFFFF"
+outline_color = "#000000"
+background = "#101014"   # hex colour or image path (album art works great)
+background_dim = 0.45
+lead_in = 1.2            # seconds a line is visible before it's sung
+hold = 0.4
+countdown_gap = 6.0      # 3-2-1 dots before lines after a gap this long
+title_card = true
+highlight_lead_ms = 0    # start wipes early (50-100 feels good to some singers)
+guide_vocals = 0.0       # 0.1-0.2 = faint original vocal as a guide
+crf = 20
+preset = "veryfast"
+audio_bitrate = "320k"
+
+[render.singer_colors]
+A = "#4FC3F7"
+B = "#F48FB1"
+AB = "#CE93D8"
