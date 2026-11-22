@@ -97,7 +97,11 @@ def test_ffmpeg_cmd_guide_vocals_and_image_background(tmp_path):
         duration=10, cfg=cfg, vocals=tmp_path / "v.wav",
     )  # fmt: skip
     graph = cmd[cmd.index("-filter_complex") + 1]
-    assert "drawbox" in graph and "ass=lyrics.ass" in graph and "volume=0.15" in graph
+    assert (
+        "colorchannelmixer=rr=0.55" in graph
+        and "ass=lyrics.ass" in graph
+        and "volume=0.15" in graph
+    )
     assert cmd[cmd.index("-map", cmd.index("-map") + 1) + 1] == "[a]"
 
 
@@ -176,7 +180,7 @@ def test_ffmpeg_cmd_cover_intro_and_cover_background(tmp_path):
 
 @pytest.mark.skipif(not _has_libass(), reason="ffmpeg with libass not available")
 def test_cover_extracted_from_audio_and_rendered_as_intro(tmp_path):
-    from deepcuts.stages.cover import ensure_cover, import_cover
+    from deepcuts.stages.media import ensure_cover, import_media
     from deepcuts.workspace import SongDir
 
     song = SongDir(tmp_path / "Band - Song").create()
@@ -191,7 +195,9 @@ def test_cover_extracted_from_audio_and_rendered_as_intro(tmp_path):
     assert ensure_cover(song) == cover  # extracted once, then reused
     webp = tmp_path / "big.webp"
     run("-f", "lavfi", "-i", "color=c=0xaa3366:s=400x400", "-frames:v", "1", str(webp))
-    assert import_cover(song, webp) == song.root / "cover.png"  # converted, replaces the old one
+    assert (
+        import_media(song, "cover", webp) == song.root / "cover.png"
+    )  # converted, replaces the old one
 
     track = tmp_path / "karaoke.wav"
     run("-i", str(song.root / "source.flac"), "-vn", str(track))
@@ -203,3 +209,102 @@ def test_cover_extracted_from_audio_and_rendered_as_intro(tmp_path):
         cover=song.root / "cover.png", intro=4.8,
     )  # fmt: skip
     assert out.exists() and out.stat().st_size > 10_000
+
+
+def _ffmpeg(*args):
+    subprocess.run(["ffmpeg", "-y", "-loglevel", "error", *args], check=True)
+
+
+def _clip(path, colour="0x228844", seconds=2, size="320x180"):
+    _ffmpeg(
+        "-f",
+        "lavfi",
+        "-i",
+        f"color=c={colour}:s={size}:d={seconds}",
+        "-pix_fmt",
+        "yuv420p",
+        str(path),
+    )
+    return path
+
+
+def test_media_args_split_settings_from_files(tmp_path):
+    from deepcuts.cli import _media_args
+
+    assert _media_args(None, None) == (None, {})
+    assert _media_args("#000000", None) == ("#000000", {"background": None})
+    assert _media_args("cover", None) == ("cover", {"background": None})
+    clip = tmp_path / "loop.mp4"
+    assert _media_args(str(clip), clip) == (None, {"background": clip, "cover": clip})
+
+
+@pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="needs ffmpeg")
+def test_import_media_images_and_videos_share_a_slot(tmp_path):
+    from deepcuts.errors import DeepcutsError
+    from deepcuts.stages.media import background_file, import_media, is_video
+    from deepcuts.workspace import SongDir
+
+    song = SongDir(tmp_path / "Band - Song").create()
+    img = tmp_path / "pic.jpeg"
+    _ffmpeg("-f", "lavfi", "-i", "color=c=red:s=64x64", "-frames:v", "1", str(img))
+    assert import_media(song, "background", img) == song.root / "background.jpg"
+    clip = _clip(tmp_path / "loop.MOV")
+    dst = import_media(song, "background", clip)
+    assert dst == song.root / "background.mov" and is_video(dst)
+    assert background_file(song) == dst and not (song.root / "background.jpg").exists()
+    with pytest.raises(DeepcutsError, match="image .* or a video"):
+        import_media(song, "background", _txt(tmp_path))
+
+
+def _txt(tmp_path):
+    p = tmp_path / "notes.txt"
+    p.write_text("x")
+    return p
+
+
+def test_ffmpeg_cmd_loops_videos_in_either_slot(tmp_path):
+    bg, cover = tmp_path / "bg.mp4", tmp_path / "cover.webm"
+    cmd = build_ffmpeg_cmd(
+        ass_name="lyrics.ass", track=tmp_path / "k.wav", out_path=tmp_path / "o.mp4",
+        duration=10, cfg=RenderConfig(), cover=cover, intro=9.68, background=bg,
+    )  # fmt: skip
+    i_bg, i_cover = cmd.index(str(bg.resolve())), cmd.index(str(cover.resolve()))
+    assert cmd[i_bg - 3 : i_bg] == ["-stream_loop", "-1", "-i"]
+    assert cmd[i_cover - 5 : i_cover] == ["-stream_loop", "-1", "-t", "9.680", "-i"]
+    graph = cmd[cmd.index("-filter_complex") + 1]
+    assert graph.startswith("[0:v]fps=30,scale=") and "[2:v]fps=30,split=2" in graph
+    assert "-loop" not in cmd  # no still-image inputs at all
+
+
+@pytest.mark.skipif(not _has_libass(), reason="ffmpeg with libass not available")
+@pytest.mark.parametrize("cover_kind", ["image", "video"])
+def test_render_with_video_background_and_image_or_video_intro(tmp_path, cover_kind):
+    track = tmp_path / "karaoke.wav"
+    _ffmpeg("-f", "lavfi", "-i", "sine=frequency=330:duration=10", "-ac", "2", str(track))
+    bg = _clip(tmp_path / "bg.mp4", "0x224488", seconds=3)  # shorter than the song: must loop
+    if cover_kind == "video":
+        cover = _clip(tmp_path / "cover.mp4", "0xaa6622", seconds=1, size="200x200")
+    else:
+        cover = tmp_path / "cover.png"
+        _ffmpeg("-f", "lavfi", "-i", "color=c=0xaa6622:s=200x200", "-frames:v", "1", str(cover))
+    cfg = RenderConfig(width=320, height=180, font_size=18, fps=10)
+    ass = tmp_path / "lyrics.ass"
+    ass.write_text(build_ass(_lines_starting_at(7.0), META, cfg, intro=3.8))
+    out = render_video(
+        ass_path=ass, track=track, out_path=tmp_path / "out.mp4", duration=10, cfg=cfg,
+        cover=cover, intro=3.8, background=bg,
+    )  # fmt: skip
+    info = subprocess.run(
+        ["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", str(out)],
+        capture_output=True, text=True, check=True,
+    ).stdout  # fmt: skip
+    assert abs(float(info) - 10) < 0.3  # looped background + intro, full song length
+    # mid-song frame is the (dimmed) blue background video, not black or the orange cover
+    frame = subprocess.run(
+        ["ffmpeg", "-loglevel", "error", "-ss", "8", "-i", str(out), "-frames:v", "1",
+         "-vf", "crop=8:8:0:0,scale=1:1", "-f", "rawvideo", "-pix_fmt", "rgb24", "-"],
+        capture_output=True, check=True,
+    ).stdout  # fmt: skip
+    r, g, b = frame[:3]
+    # 0x224488 dimmed by 0.45 is about (18, 37, 75): still clearly blue, not washed out to grey
+    assert b > 60 and b > 2 * r

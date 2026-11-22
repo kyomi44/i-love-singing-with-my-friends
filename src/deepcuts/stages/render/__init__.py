@@ -8,9 +8,9 @@ from pathlib import Path
 from deepcuts.config import Config
 from deepcuts.models import Line, StemSet
 from deepcuts.stages.align.postprocess import apply_overrides
-from deepcuts.stages.cover import cover_file
 from deepcuts.stages.diarize import assign_singers, load_turns
 from deepcuts.stages.lyrics.lrc import dump_lrc
+from deepcuts.stages.media import background_file, cover_file
 from deepcuts.stages.render.ass import build_ass, intro_end
 from deepcuts.stages.render.video import render_video
 from deepcuts.workspace import SongDir
@@ -73,6 +73,7 @@ def run_render(song: SongDir, stems: StemSet, cfg: Config) -> dict[str, Path]:
             vocals=stems.vocals,
             cover=cover,
             intro=intro,
+            background=background_file(song),
         )
         result["video"] = paths["video"]
     return result

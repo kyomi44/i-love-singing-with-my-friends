@@ -6,15 +6,32 @@ from pathlib import Path
 
 from deepcuts import audio
 from deepcuts.config import RenderConfig, expand
+from deepcuts.stages.media import is_video
 from deepcuts.stages.render.ass import COVER_CENTER_Y, COVER_HEIGHT
+
+
+def _fill(W: int, H: int) -> str:
+    return f"scale={W}:{H}:force_original_aspect_ratio=increase,crop={W}:{H},setsar=1"
 
 
 def _blurred_fill(W: int, H: int) -> str:
     """Scale+crop to fill the frame, then a cheap heavy blur (blur small, scale back up)."""
-    return (
-        f"scale={W}:{H}:force_original_aspect_ratio=increase,crop={W}:{H},"
-        f"scale={W // 8}:{H // 8},gblur=sigma=6,scale={W}:{H},setsar=1"
-    )
+    return f"{_fill(W, H)},scale={W // 8}:{H // 8},gblur=sigma=6,scale={W}:{H},setsar=1"
+
+
+def _dim(amount: float) -> str:
+    """Darken by multiplying RGB. (drawbox=black@a looked right on images, but on YUV video
+    frames it blends chroma wrongly and washed a blue clip out to grey.)"""
+    k = round(1.0 - amount, 3)
+    return f"colorchannelmixer=rr={k}:gg={k}:bb={k}"
+
+
+def _media_input(path: Path, fps: int, length: float | None = None) -> list[str]:
+    """ffmpeg input args: images loop as stills, videos loop end to end (their audio is ignored)."""
+    t = ["-t", f"{length:.3f}"] if length is not None else []
+    if is_video(path):
+        return ["-stream_loop", "-1", *t, "-i", str(path.resolve())]
+    return ["-loop", "1", "-framerate", str(fps), *t, "-i", str(path.resolve())]
 
 
 def build_ffmpeg_cmd(
@@ -27,33 +44,34 @@ def build_ffmpeg_cmd(
     vocals: Path | None = None,
     cover: Path | None = None,
     intro: float | None = None,
+    background: Path | None = None,
 ) -> list[str]:
-    """`cover` + `intro` (seconds): open on the cover, fading out so it's gone at `intro`."""
+    """Video = background, then the cover intro (if `cover` + `intro`), then the lyrics.
+
+    `background` (the song folder's background image/video) wins over render.background, which
+    is a "#hex" colour, "cover" (the cover, blurred), or a path. `intro` is when the cover has
+    fully faded out. Images and videos work in either slot.
+    """
     W, H, fps = cfg.width, cfg.height, cfg.fps
     cmd = ["ffmpeg", "-y", "-hide_banner", "-loglevel", "error"]
-    vf: list[str] = []
-    background = cfg.background
-    if background == "cover" and cover is None:
-        background = "#101014"  # no art for this song: plain default
-    if background.startswith("#"):
-        cmd += ["-f", "lavfi", "-i", f"color=c=0x{background.lstrip('#')}:s={W}x{H}:r={fps}"]
+    src, blur = background, False
+    if src is None and cfg.background == "cover":
+        src, blur = cover, True  # None if the song has no art: plain colour below
+    elif src is None and not cfg.background.startswith("#"):
+        src = expand(cfg.background).resolve()
+        if not src.exists():
+            raise FileNotFoundError(f"background not found: {src}")
+    if src is None:
+        colour = cfg.background if cfg.background.startswith("#") else "#101014"
+        cmd += ["-f", "lavfi", "-i", f"color=c=0x{colour.lstrip('#')}:s={W}x{H}:r={fps}"]
+        vf = ["null"]
     else:
-        image = (cover if background == "cover" else expand(background)).resolve()  # type: ignore[union-attr]
-        if not image.exists():
-            raise FileNotFoundError(f"background image not found: {image}")
-        cmd += ["-loop", "1", "-framerate", str(fps), "-i", str(image)]
-        if background == "cover":
-            vf.append(_blurred_fill(W, H))
-        else:
-            vf += [
-                f"scale={W}:{H}:force_original_aspect_ratio=increase",
-                f"crop={W}:{H}",
-                "setsar=1",
-            ]
+        cmd += _media_input(src, fps)
+        vf = [f"fps={fps}", _blurred_fill(W, H) if blur else _fill(W, H)]
         if cfg.background_dim > 0:
-            vf.append(f"drawbox=color=black@{cfg.background_dim}:t=fill")
+            vf.append(_dim(cfg.background_dim))
     cmd += ["-i", str(track.resolve())]
-    graph = [f"[0:v]{','.join(vf) or 'null'}[base]"]
+    graph = [f"[0:v]{','.join(vf)}[base]"]
     amap = "1:a"
     if vocals is not None and cfg.guide_vocals > 0:
         cmd += ["-i", str(vocals.resolve())]
@@ -64,22 +82,13 @@ def build_ffmpeg_cmd(
     below = "[base]"
     if cover is not None and intro is not None:
         idx = 3 if amap == "[a]" else 2
-        cmd += [
-            "-loop",
-            "1",
-            "-framerate",
-            str(fps),
-            "-t",
-            f"{intro:.3f}",
-            "-i",
-            str(cover.resolve()),
-        ]
+        cmd += _media_input(cover, fps, intro)
         fade = min(cfg.cover_fade, intro / 3)
         ch = round(H * COVER_HEIGHT / 2) * 2
         cy = round(H * COVER_CENTER_Y)
         graph.append(
-            f"[{idx}:v]split=2[cb][cf];"
-            f"[cb]{_blurred_fill(W, H)},drawbox=color=black@0.35:t=fill[cbg];"
+            f"[{idx}:v]fps={fps},split=2[cb][cf];"
+            f"[cb]{_blurred_fill(W, H)},{_dim(0.35)}[cbg];"
             f"[cf]scale=-2:{ch},setsar=1[cfg];"
             f"[cbg][cfg]overlay=x=(main_w-overlay_w)/2:y={cy}-overlay_h/2,"
             f"format=yuva420p,fade=t=out:st={intro - fade:.3f}:d={fade:.3f}:alpha=1[intro];"
@@ -110,6 +119,7 @@ def render_video(
     vocals: Path | None = None,
     cover: Path | None = None,
     intro: float | None = None,
+    background: Path | None = None,
 ) -> Path:
     # ffmpeg filter args choke on ':' and quotes in paths, so run inside the ASS file's folder.
     cmd = build_ffmpeg_cmd(
@@ -121,6 +131,7 @@ def render_video(
         vocals=vocals,
         cover=cover,
         intro=intro,
+        background=background,
     )
     audio.run(cmd, cwd=ass_path.parent)
     return out_path

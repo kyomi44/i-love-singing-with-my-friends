@@ -78,7 +78,8 @@ unsung_color = "#FFFFFF"
 outline_color = "#000000"
 cover_intro = true       # open on the cover art + title, then fade into the lyrics
 cover_fade = 1.0         # seconds
-background = "#101014"   # hex colour, image path, or "cover" (blurred, dimmed cover art)
+background = "#101014"   # hex colour, image/video path, or "cover" (blurred, dimmed cover art)
+                         # a song folder background.* file (--background FILE) wins
 background_dim = 0.45
 lead_in = 1.2            # seconds a line is visible before it's sung
 hold = 0.4

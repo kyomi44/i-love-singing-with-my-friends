@@ -61,6 +61,26 @@ def _song(ref: str, cfg: Config) -> SongDir:
         raise DeepcutsError(str(exc)) from exc
 
 
+def _media_args(
+    background: str | None, cover: Path | None
+) -> tuple[str | None, dict[str, Path | None]]:
+    """--background is a colour / "cover" (a setting) or a file (saved in the song folder).
+
+    Returns (render.background override, media slots to import or clear). An explicit colour or
+    "cover" clears the song's own background file, which would otherwise win.
+    """
+    media: dict[str, Path | None] = {}
+    if cover is not None:
+        media["cover"] = cover
+    if background is None:
+        return None, media
+    if background.startswith("#") or background == "cover":
+        media["background"] = None
+        return background, media
+    media["background"] = Path(background)
+    return None, media
+
+
 def _lyrics_or_die(pipe: Pipeline, song: SongDir):
     lyrics = pipe.lyrics(song)
     if lyrics is None:
@@ -129,10 +149,12 @@ def make(
         float | None, typer.Option(help="Mix vocals back in at this gain.")
     ] = None,
     background: Annotated[
-        str | None, typer.Option(help='#hex colour, image path, or "cover".')
+        str | None,
+        typer.Option(help='Behind the lyrics: #hex, "cover", or an image/video file.'),
     ] = None,
     cover: Annotated[
-        Path | None, typer.Option(help="Cover art for the intro (default: art in the file).")
+        Path | None,
+        typer.Option(help="Intro image or video (default: the art embedded in the file)."),
     ] = None,
     no_video: Annotated[
         bool, typer.Option("--no-video", help="Only write .ass/.lrc/.json.")
@@ -142,6 +164,7 @@ def make(
     config: ConfigOpt = None,
 ) -> None:
     """Run the whole pipeline: ingest -> lyrics -> separate -> align -> render."""
+    background, media = _media_args(background, cover)
     cfg = _cfg(
         config,
         language=language,
@@ -158,7 +181,7 @@ def make(
             "render.video": False if no_video else None,
         },
     )
-    result = Pipeline(cfg, force, err).make(source, artist, title, album, lyrics, cover)
+    result = Pipeline(cfg, force, err).make(source, artist, title, album, lyrics, media)
     out.print()
     for kind, path in result.outputs.items():
         out.print(f"  [dim]{kind:>5}[/]  {path}")
@@ -231,10 +254,11 @@ def render(
         float | None, typer.Option(help="Mix vocals back in at this gain.")
     ] = None,
     background: Annotated[
-        str | None, typer.Option(help='#hex colour, image path, or "cover".')
+        str | None,
+        typer.Option(help='Behind the lyrics: #hex, "cover", or an image/video file.'),
     ] = None,
     cover: Annotated[
-        Path | None, typer.Option(help="Use this image as the song's cover art.")
+        Path | None, typer.Option(help="Use this image or video as the song's intro.")
     ] = None,
     no_video: Annotated[bool, typer.Option("--no-video")] = False,
     diarize: Annotated[bool | None, typer.Option("--diarize/--no-diarize")] = None,
@@ -242,6 +266,7 @@ def render(
     config: ConfigOpt = None,
 ) -> None:
     """Re-render outputs from the current alignment + overrides (no ML needed)."""
+    background, media = _media_args(background, cover)
     cfg = _cfg(
         config,
         **{
@@ -252,11 +277,9 @@ def render(
         },
     )
     sd = _song(song, cfg)
-    if cover is not None:
-        from deepcuts.stages.cover import import_cover
-
-        import_cover(sd, cover)
-    outputs = Pipeline(cfg, force, err).render(sd)
+    pipe = Pipeline(cfg, force, err)
+    pipe.set_media(sd, media)
+    outputs = pipe.render(sd)
     for kind, path in outputs.items():
         out.print(f"  [dim]{kind:>5}[/]  {path}")
 

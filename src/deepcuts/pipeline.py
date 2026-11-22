@@ -174,8 +174,18 @@ class Pipeline:
         song.mark("diarize", fp)
         self._done("diarize", f"{len({t[2] for t in turns})} voices, {len(turns)} turns")
 
+    def set_media(self, song: SongDir, media: dict[str, Path | None]) -> None:
+        from deepcuts.stages.media import clear_media, import_media
+
+        for slot, src in media.items():
+            if src is not None:
+                dst = import_media(song, slot, src)
+                self.console.print(f"[green]✓[/] {slot:<9} {dst.name} (saved in the song folder)")
+            elif clear_media(song, slot):
+                self.console.print(f"[dim]·[/] {slot:<9} removed the song's own {slot} file")
+
     def render(self, song: SongDir, stems: StemSet | None = None) -> dict[str, Path]:
-        from deepcuts.stages.cover import ensure_cover
+        from deepcuts.stages.media import background_file, ensure_cover
         from deepcuts.stages.render import output_paths, run_render
 
         stems = stems or song.load_stems()
@@ -191,6 +201,7 @@ class Pipeline:
             song.diarization_path,
             stems.karaoke,
             cover,
+            background_file(song) if rc.video else None,
         ]
         if self.cfg.render.guide_vocals > 0:
             inputs.append(stems.vocals)
@@ -227,13 +238,11 @@ class Pipeline:
         title: str | None = None,
         album: str | None = None,
         lyrics_file: Path | None = None,
-        cover_file: Path | None = None,
+        media: dict[str, Path | None] | None = None,
     ) -> MakeResult:
+        """`media`: {"cover"|"background": file to import, or None to clear that slot}."""
         song = self.ingest(source, artist, title, album)
-        if cover_file is not None:
-            from deepcuts.stages.cover import import_cover
-
-            import_cover(song, cover_file)
+        self.set_media(song, media or {})
         lyrics = self.lyrics(song, lyrics_file)
         if lyrics is None and not self.cfg.lyrics.asr_fallback:
             raise LyricsNotFound(

@@ -26,9 +26,10 @@ uv run deepcuts doctor                    # environment check
   into alignment.json.
 - `stages/align/activity.py`: vocal activity from the stem. ctc.py uses it to mask emissions in silence, clip
   each anchored window at the next line's onset, and fit word spans (trim into singing, hold through notes).
-- `stages/cover.py`: the song folder's `cover.png|jpg` (from `--cover`, else extracted from the source audio's
-  embedded art). `render/ass.py::intro_end` decides when the cover intro ends, before the first countdown, and
-  both the ASS title card and the ffmpeg fade in `render/video.py` use it.
+- `stages/media.py`: per-song `cover.*` (intro) and `background.*` (behind the lyrics), each an image or a video,
+  set by `--cover` / `--background FILE` or dropped in the folder. The cover falls back to art embedded in the source
+  audio. `render/ass.py::intro_end` decides when the intro ends, before the first countdown, and both the ASS title
+  card and the ffmpeg fade in `render/video.py` use it. Videos loop with `-stream_loop -1`, images with `-loop 1`.
 - `remote/`: `compute = "modal"`. `modal_app.py` is the GPU container (image from this repo's uv.lock + the local
   package), `client.py` starts one ephemeral app per process and swaps in for the separation stage and the aligner.
 - `stages/render/layout.py::schedule` is mirrored in JS in `web/player.html` between `// <layout>` markers.
@@ -60,6 +61,8 @@ uv run deepcuts doctor                    # environment check
   (`with_options()` is too late). Any GPU needs a payment method on the account. Exceptions cross the wire by
   pickle, so DeepcutsError subclasses with extra __init__ args need `__reduce__` (see MissingExtra).
 - `-v` only sets the `deepcuts` logger to DEBUG: root DEBUG made Modal's grpc/hpack layer log auth tokens.
+- Dimming is `colorchannelmixer` (an RGB multiply). `drawbox=color=black@a` looked fine on images but washed
+  YUV video frames out to grey (blue 0x224488 came out as (30, 37, 39) instead of about (18, 37, 75)).
 - Stage fingerprints cover inputs and config, not code. After changing stage code use `-f align` etc.
 
 ## Status and next steps
