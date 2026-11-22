@@ -108,6 +108,40 @@ def intro_end(lines: list[Line], cfg: RenderConfig) -> float | None:
     return end if end >= MIN_INTRO else None
 
 
+def countdown_dots(i: int, spans, sched, cfg: RenderConfig) -> list[tuple[float, int]]:
+    """(start, dot count) for the 3-2-1 countdown before line i: after a long gap, or a late
+    first line. Each step lasts 1 s; steps that would overlap the previous line are dropped."""
+    s = spans[i][0]
+    if not sched.fresh[i]:
+        return []
+    prev_end = spans[i - 1][1] if i else 0.0
+    if not (s - prev_end >= cfg.countdown_gap or (i == 0 and s >= 4.0)):
+        return []
+    return [(s - k, k) for k in (3, 2, 1) if s - k >= prev_end + 0.3]
+
+
+def display_schedule(lines: list[Line], cfg: RenderConfig) -> list[dict | None]:
+    """Per line (None if untimed): row, appear, disappear, countdown and the highlight lead, as
+    the video lays it out. Written into timing.json so other players needn't re-derive it."""
+    timed, spans, sched = _timeline(lines, cfg)
+    index = {id(line): i for i, line in enumerate(timed)}
+    out: list[dict | None] = []
+    for line in lines:
+        i = index.get(id(line))
+        if i is None:
+            out.append(None)
+            continue
+        out.append(
+            {
+                "row": sched.rows[i],
+                "appear": round(sched.appear[i], 3),
+                "disappear": round(sched.disappear[i], 3),
+                "countdown": [[round(t, 3), k] for t, k in countdown_dots(i, spans, sched, cfg)],
+            }
+        )
+    return out
+
+
 def build_ass(
     lines: list[Line], meta: SongMeta, cfg: RenderConfig, intro: float | None = None
 ) -> str:
@@ -174,16 +208,10 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
             )
 
     for i, line in enumerate(timed):
-        s, _e = spans[i]
-        if sched.fresh[i]:
-            prev_end = spans[i - 1][1] if i else 0.0
-            if s - prev_end >= cfg.countdown_gap or (i == 0 and s >= 4.0):
-                for k in (3, 2, 1):
-                    t0 = s - k
-                    if t0 >= prev_end + 0.3:
-                        dots = " ".join(["●"] * k)
-                        pos = f"\\an5\\pos({W // 2},{round(row_y[0] - fs * 1.25)})"
-                        events.append(_dialogue(t0, t0 + 1.0, "Countdown", f"{{{pos}}}{dots}"))
+        for t0, k in countdown_dots(i, spans, sched, cfg):
+            dots = " ".join(["●"] * k)
+            pos = f"\\an5\\pos({W // 2},{round(row_y[0] - fs * 1.25)})"
+            events.append(_dialogue(t0, t0 + 1.0, "Countdown", f"{{{pos}}}{dots}"))
         size = fit_font_size(line.text, fs, W)
         tags = f"\\an5\\pos({W // 2},{row_y[sched.rows[i]]})"
         if size != fs:

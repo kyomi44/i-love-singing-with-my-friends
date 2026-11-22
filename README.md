@@ -73,6 +73,28 @@ Or set `compute = "modal"` in your config to make it the default (`--compute loc
 
 The container runs the same stage code from this repo's `uv.lock`, so local and remote results match.
 
+## Sing in the terminal
+
+`player/` is a terminal karaoke player in Rust for songs you've rendered. It plays the karaoke track and shows the lyrics with the same two-row layout, letter-by-letter wipe and 3-2-1 countdowns as the video, and draws the cover art in the terminal during the intro.
+
+```bash
+cargo install --path player          # once (Rust from https://rustup.rs)
+deepcuts-sing                        # pick a song from your library
+deepcuts-sing salem                  # or any unique part of its name
+```
+
+| key | action |
+|---|---|
+| `space` | pause / play |
+| `←` `→` | seek 5 s |
+| `[` `]` | previous / next line (with a 1.5 s run-up) |
+| `v` | guide vocals on/off (the singer, quietly) |
+| `+` `-` | volume |
+| `,` `.` | lyrics 20 ms earlier / later, e.g. for Bluetooth latency (`--sync-ms 200` to start that way) |
+| `r` / `q` | restart / back to the list |
+
+The lyrics follow the audio's own sample clock, so they can't drift from the music. Cover art is drawn in full colour on terminals with truecolor (iTerm2, Ghostty, WezTerm, kitty), and in 256 colours elsewhere (macOS Terminal). It reads `out/timing.json`, so re-render older songs once (`deepcuts render <song> --no-video`) to add the layout data it needs.
+
 ## Fixing timing by ear
 
 ```bash

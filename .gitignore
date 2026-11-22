@@ -23,3 +23,6 @@ library/
 *.onnx
 
 .DS_Store
+
+# rust terminal player
+player/target/

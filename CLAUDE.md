@@ -14,6 +14,7 @@ uv sync --extra dev --extra modal         # or: run separation + alignment on Mo
 uv run pytest                             # ffmpeg+libass and node are used when present
 uv run ruff check && uv run ruff format --check
 uv run deepcuts doctor                    # environment check
+cd player && cargo test && cargo clippy -- -D warnings   # the Rust terminal player
 ```
 
 ## Where things are
@@ -32,6 +33,10 @@ uv run deepcuts doctor                    # environment check
   card and the ffmpeg fade in `render/video.py` use it. Videos loop with `-stream_loop -1`, images with `-loop 1`.
 - `remote/`: `compute = "modal"`. `modal_app.py` is the GPU container (image from this repo's uv.lock + the local
   package), `client.py` starts one ephemeral app per process and swaps in for the separation stage and the aligner.
+- `player/` (Rust, `deepcuts-sing`): terminal karaoke player. It reads `out/timing.json`, whose per-line `display`
+  (row/appear/disappear/countdown from `render/ass.py::display_schedule`) means layout.py is *not* re-implemented
+  in Rust. `audio.rs` mixes the stems in its own rodio Source, whose frame counter is the lyrics clock.
+  `lyrics.rs` is pure and unit-tested. `cd player && cargo clippy -- -D warnings && cargo test`.
 - `stages/render/layout.py::schedule` is mirrored in JS in `web/player.html` between `// <layout>` markers.
   `tests/test_editor_parity.py` runs both and compares. Change both together.
 

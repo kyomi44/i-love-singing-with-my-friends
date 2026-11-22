@@ -308,3 +308,19 @@ def test_render_with_video_background_and_image_or_video_intro(tmp_path, cover_k
     r, g, b = frame[:3]
     # 0x224488 dimmed by 0.45 is about (18, 37, 75): still clearly blue, not washed out to grey
     assert b > 60 and b > 2 * r
+
+
+def test_display_schedule_matches_the_video_layout():
+    from deepcuts.stages.render.ass import display_schedule
+
+    cfg = RenderConfig()
+    lines = song_lines() + [Line(words=[Word(text="untimed")])]
+    disp = display_schedule(lines, cfg)
+    assert disp[-1] is None  # untimed lines have no slot on screen
+    sched = schedule([(ln.start, ln.end) for ln in lines[:-1]], cfg.lead_in, cfg.hold)
+    assert [d["row"] for d in disp[:-1]] == sched.rows
+    assert [d["appear"] for d in disp[:-1]] == [round(a, 3) for a in sched.appear]
+    # first line at 5.0 s gets the full 3-2-1, in the same places build_ass draws it
+    assert disp[0]["countdown"] == [[2.0, 3], [3.0, 2], [4.0, 1]]
+    ass = build_ass(lines, META, cfg)
+    assert ass.count(",Countdown,") == 3 and "0:00:02.00,0:00:03.00,Countdown" in ass
