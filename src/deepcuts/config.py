@@ -132,8 +132,13 @@ class RenderConfig(BaseModel):
     singer_colors: dict[str, str] = Field(
         default_factory=lambda: {"A": "#4FC3F7", "B": "#F48FB1", "AB": "#CE93D8"}
     )
+    cover_intro: bool = True
+    """Open on the cover art (song folder cover.png/jpg, or art embedded in the audio file) with
+    the title underneath, then fade into the lyrics just before the first line's countdown."""
+    cover_fade: float = 1.0
+    """Seconds the cover takes to fade out into the lyrics."""
     background: str = "#101014"
-    """A hex colour or a path to an image (album art works great)."""
+    """A hex colour, a path to an image, or "cover" (the song's cover art, blurred and dimmed)."""
     background_dim: float = 0.45
     lead_in: float = 1.2
     """Seconds a line is shown before its first word."""

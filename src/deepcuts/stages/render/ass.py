@@ -77,12 +77,44 @@ def _dialogue(
     return f"Dialogue: {layer},{ts(start)},{ts(end)},{style},{name},0,0,0,,{text}"
 
 
-def build_ass(lines: list[Line], meta: SongMeta, cfg: RenderConfig) -> str:
-    W, H, fs = cfg.width, cfg.height, cfg.font_size
+MIN_INTRO = 2.5
+"""Seconds of intro needed before the cover is worth showing."""
+COVER_HEIGHT = 0.6
+COVER_CENTER_Y = 0.42
+"""Cover size and position as fractions of the frame height (shared with video.py)."""
+
+
+def _timeline(lines: list[Line], cfg: RenderConfig):
     lead = cfg.highlight_lead_ms / 1000.0
     timed = [line for line in lines if line.start is not None and line.end is not None]
     spans = [(line.start - lead, line.end - lead) for line in timed]  # type: ignore[operator]
-    sched = schedule(spans, cfg.lead_in, cfg.hold)
+    return timed, spans, schedule(spans, cfg.lead_in, cfg.hold)
+
+
+def intro_end(lines: list[Line], cfg: RenderConfig) -> float | None:
+    """When the cover intro has fully faded out, or None if the intro is too short to show.
+
+    It ends before the first line appears, and before the first line's 3-2-1 countdown (which
+    sits where the cover is), with a 0.2 s breath in between.
+    """
+    _, spans, sched = _timeline(lines, cfg)
+    if not spans:
+        return None
+    s0 = spans[0][0]
+    end = sched.appear[0]
+    if s0 >= 4.0:  # build_ass gives the first line a countdown from s0 - 3
+        end = min(end, s0 - 3.0)
+    end -= 0.2
+    return end if end >= MIN_INTRO else None
+
+
+def build_ass(
+    lines: list[Line], meta: SongMeta, cfg: RenderConfig, intro: float | None = None
+) -> str:
+    """`intro`: end time of the cover intro (see intro_end), if the video opens on the cover."""
+    W, H, fs = cfg.width, cfg.height, cfg.font_size
+    lead = cfg.highlight_lead_ms / 1000.0
+    timed, spans, sched = _timeline(lines, cfg)
     row_y = [round(H / 2 - fs * 0.85), round(H / 2 + fs * 0.85)]
     bold = -1 if cfg.bold else 0
 
@@ -106,7 +138,23 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 """
     events: list[str] = []
 
-    if cfg.title_card and spans:
+    if cfg.title_card and spans and intro is not None:
+        # under the cover, fading out with it
+        fade_ms = round(min(cfg.cover_fade, intro / 3) * 1000)
+        cover_bottom = H * (COVER_CENTER_Y + COVER_HEIGHT / 2)
+        pos_t = f"\\pos({W // 2},{round(cover_bottom + fs * 1.1)})"
+        pos_a = f"\\pos({W // 2},{round(cover_bottom + fs * 2.15)})"
+        fad = f"\\fad(600,{fade_ms})"
+        events.append(_dialogue(0.0, intro, "Title", f"{{\\an5{pos_t}{fad}}}{escape(meta.title)}"))
+        events.append(
+            _dialogue(
+                0.0,
+                intro,
+                "Title",
+                f"{{\\an5{pos_a}\\fs{round(fs * 0.7)}{fad}}}{escape(meta.artist)}",
+            )
+        )
+    elif cfg.title_card and spans:
         end = min(spans[0][0] - cfg.lead_in - 0.3, 6.5)
         if end > 1.8:
             pos_t, pos_a = (

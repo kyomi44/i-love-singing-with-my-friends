@@ -137,6 +137,7 @@ uv run --with whisperx deepcuts make song.flac --asr    # or a throwaway overlay
 ## Outputs (`<song>/out/`)
 
 - `<song> (karaoke).mp4`: 1080p H.264, solid colour or `--background cover.jpg` (dimmed), optional `--guide-vocals 0.15`
+- **Cover intro**: the video opens on the album art with the title underneath, then fades into the lyrics just before the first line's countdown. The art comes from the audio file's embedded cover, or from `--cover FILE` (saved as `cover.png`/`cover.jpg` in the song folder). Turn it off with `render.cover_intro = false`. `--background cover` keeps a blurred, dimmed copy of the art behind the lyrics
 - `lyrics.ass`: the karaoke subtitles (`\kf` wipes), playable over the stems in mpv/VLC
 - `lyrics.lrc`: enhanced LRC with word timestamps
 - `timing.json`: everything, for building your own player

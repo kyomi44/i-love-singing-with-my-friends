@@ -26,6 +26,9 @@ uv run deepcuts doctor                    # environment check
   into alignment.json.
 - `stages/align/activity.py`: vocal activity from the stem. ctc.py uses it to mask emissions in silence, clip
   each anchored window at the next line's onset, and fit word spans (trim into singing, hold through notes).
+- `stages/cover.py`: the song folder's `cover.png|jpg` (from `--cover`, else extracted from the source audio's
+  embedded art). `render/ass.py::intro_end` decides when the cover intro ends, before the first countdown, and
+  both the ASS title card and the ffmpeg fade in `render/video.py` use it.
 - `remote/`: `compute = "modal"`. `modal_app.py` is the GPU container (image from this repo's uv.lock + the local
   package), `client.py` starts one ephemeral app per process and swaps in for the separation stage and the aligner.
 - `stages/render/layout.py::schedule` is mirrored in JS in `web/player.html` between `// <layout>` markers.

@@ -175,10 +175,23 @@ class Pipeline:
         self._done("diarize", f"{len({t[2] for t in turns})} voices, {len(turns)} turns")
 
     def render(self, song: SongDir, stems: StemSet | None = None) -> dict[str, Path]:
+        from deepcuts.stages.cover import ensure_cover
         from deepcuts.stages.render import output_paths, run_render
 
         stems = stems or song.load_stems()
-        inputs = [song.alignment_path, song.overrides_path, song.diarization_path, stems.karaoke]
+        rc = self.cfg.render
+        cover = (
+            ensure_cover(song)
+            if rc.video and (rc.cover_intro or rc.background == "cover")
+            else None
+        )
+        inputs = [
+            song.alignment_path,
+            song.overrides_path,
+            song.diarization_path,
+            stems.karaoke,
+            cover,
+        ]
         if self.cfg.render.guide_vocals > 0:
             inputs.append(stems.vocals)
         params = {
@@ -214,8 +227,13 @@ class Pipeline:
         title: str | None = None,
         album: str | None = None,
         lyrics_file: Path | None = None,
+        cover_file: Path | None = None,
     ) -> MakeResult:
         song = self.ingest(source, artist, title, album)
+        if cover_file is not None:
+            from deepcuts.stages.cover import import_cover
+
+            import_cover(song, cover_file)
         lyrics = self.lyrics(song, lyrics_file)
         if lyrics is None and not self.cfg.lyrics.asr_fallback:
             raise LyricsNotFound(

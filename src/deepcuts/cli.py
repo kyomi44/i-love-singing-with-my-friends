@@ -128,7 +128,12 @@ def make(
     guide_vocals: Annotated[
         float | None, typer.Option(help="Mix vocals back in at this gain.")
     ] = None,
-    background: Annotated[str | None, typer.Option(help="#hex colour or image path.")] = None,
+    background: Annotated[
+        str | None, typer.Option(help='#hex colour, image path, or "cover".')
+    ] = None,
+    cover: Annotated[
+        Path | None, typer.Option(help="Cover art for the intro (default: art in the file).")
+    ] = None,
     no_video: Annotated[
         bool, typer.Option("--no-video", help="Only write .ass/.lrc/.json.")
     ] = False,
@@ -153,7 +158,7 @@ def make(
             "render.video": False if no_video else None,
         },
     )
-    result = Pipeline(cfg, force, err).make(source, artist, title, album, lyrics)
+    result = Pipeline(cfg, force, err).make(source, artist, title, album, lyrics, cover)
     out.print()
     for kind, path in result.outputs.items():
         out.print(f"  [dim]{kind:>5}[/]  {path}")
@@ -225,7 +230,12 @@ def render(
     guide_vocals: Annotated[
         float | None, typer.Option(help="Mix vocals back in at this gain.")
     ] = None,
-    background: Annotated[str | None, typer.Option(help="#hex colour or image path.")] = None,
+    background: Annotated[
+        str | None, typer.Option(help='#hex colour, image path, or "cover".')
+    ] = None,
+    cover: Annotated[
+        Path | None, typer.Option(help="Use this image as the song's cover art.")
+    ] = None,
     no_video: Annotated[bool, typer.Option("--no-video")] = False,
     diarize: Annotated[bool | None, typer.Option("--diarize/--no-diarize")] = None,
     force: ForceOpt = [],
@@ -241,7 +251,12 @@ def render(
             "diarize.enabled": diarize,
         },
     )
-    outputs = Pipeline(cfg, force, err).render(_song(song, cfg))
+    sd = _song(song, cfg)
+    if cover is not None:
+        from deepcuts.stages.cover import import_cover
+
+        import_cover(sd, cover)
+    outputs = Pipeline(cfg, force, err).render(sd)
     for kind, path in outputs.items():
         out.print(f"  [dim]{kind:>5}[/]  {path}")
 
