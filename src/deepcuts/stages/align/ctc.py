@@ -18,6 +18,7 @@ from pathlib import Path
 from deepcuts.config import AlignConfig
 from deepcuts.errors import MissingExtra
 from deepcuts.models import Line, Word
+from deepcuts.stages.align.activity import active_frames, clip_at_next_onset, fit_to_activity
 from deepcuts.stages.align.anchors import estimate_offset, line_windows, pick_best
 from deepcuts.stages.align.matching import match_words
 from deepcuts.text import is_alignable
@@ -41,7 +42,7 @@ class CtcAligner:
             import ctc_forced_aligner as cfa
             import torch
         except ImportError as exc:
-            raise MissingExtra("align", "ctc-forced-aligner") from exc
+            raise MissingExtra("align", "ctc-forced-aligner", cause=str(exc)) from exc
         self._cfa = cfa
         self._torch = torch
         self.cfg = cfg
@@ -63,6 +64,19 @@ class CtcAligner:
             )
         self.stride_ms = float(stride)
         duration = emissions.shape[0] * self.stride_ms / 1000.0
+        # Vocal activity keeps words where somebody is actually singing (see activity.py):
+        # masked emissions, windows that stop at the next line's onset, spans fitted afterwards.
+        self._active = self._activity(wav, int(emissions.shape[0]))
+        if self._active is not None:
+            emissions = self._mask_silence(emissions, self._active)
+        lines, offset = self._align_all(emissions, lines, language, strategy, duration)
+        if self._active is not None:
+            fit_to_activity(lines, self._active, self.stride_ms / 1000.0)
+        return lines, offset
+
+    def _align_all(
+        self, emissions, lines: list[Line], language: str, strategy: str, duration: float
+    ) -> tuple[list[Line], float | None]:
         has_anchors = all(line.anchor is not None for line in lines)
 
         if strategy == "anchored" and has_anchors:
@@ -89,16 +103,53 @@ class CtcAligner:
             line.anchor = line.anchor + offset  # type: ignore[operator]
             if line.anchor_end is not None:
                 line.anchor_end += offset
+        anchors = [line.anchor for line in out]
         windows = line_windows(
-            [line.anchor for line in out],  # type: ignore[misc]
+            anchors,  # type: ignore[arg-type]
             [line.anchor_end for line in out],
             duration,
             self.cfg.window_pad_before,
             self.cfg.window_pad_after,
         )
+        if self._active is not None:
+            windows = clip_at_next_onset(
+                windows,
+                anchors,
+                self._active,
+                self.stride_ms / 1000.0,  # type: ignore[arg-type]
+            )
         for line, (ws, we) in zip(out, windows, strict=True):
             if not self._align_words(emissions, line.words, ws, we, language, "edges"):
                 log.debug("line window alignment failed, will interpolate: %r", line.text)
+        return out
+
+    def _activity(self, wav, frames: int) -> list[bool] | None:
+        """Per-emission-frame vocal activity of the stem (see activity.py), or None if disabled."""
+        if self.cfg.silence_rel_db is None:
+            return None
+        torch = self._torch
+        hop = round(16000 * self.stride_ms / 1000.0)  # MMS runs at 16 kHz
+        x = wav.flatten().float()
+        x = torch.nn.functional.pad(x, (0, max(0, frames * hop - x.numel())))[: frames * hop]
+        levels = (10 * torch.log10(x.view(frames, hop).pow(2).mean(dim=1) + 1e-10)).tolist()
+        hangover = round(self.cfg.silence_hangover * 1000.0 / self.stride_ms)
+        active = active_frames(levels, self.cfg.silence_rel_db, hangover=hangover)
+        log.debug("vocal activity: %d of %d frames active", sum(active), frames)
+        if not any(active):
+            return None
+        return active
+
+    def _mask_silence(self, emissions, active: list[bool]):
+        """Only blank/<star> may occupy frames where nobody is singing."""
+        torch = self._torch
+        silent = torch.tensor([not a for a in active], device=emissions.device)
+        vocab = self.tokenizer.get_vocab()
+        blank = vocab.get("<blank>", self.tokenizer.pad_token_id)
+        cols = torch.ones(emissions.shape[1], dtype=torch.bool, device=emissions.device)
+        cols[blank] = False
+        cols[-1] = False  # the <star> column ctc-forced-aligner appends
+        out = emissions.masked_fill(silent[:, None] & cols[None, :], -1e4)
+        out[silent, blank] = 0.0
         return out
 
     def _preprocess(self, text: str, language: str, star: str):

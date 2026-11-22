@@ -33,8 +33,10 @@ class SeparationConfig(BaseModel):
     backing: Literal["keep", "remove"] = "keep"
     """keep = harmonies/backing vocals stay in the karaoke track (how real karaoke tracks sound)."""
     model_dir: Path = Path("~/.cache/deepcuts/models")
-    overlap: int | None = None
-    """RoFormer overlap (2 = faster, 8 = best seams). None = audio-separator default."""
+    overlap: int | None = 2
+    """RoFormer chunk overlap. None = each model's own default, which is 8 for the becruily
+    karaoke model: measured on an L4/A10, 2 cut that pass from 153 s to 27 s for a 3-minute
+    song, with the stems within ~30 dB SDR of the overlap-8 result. 8 = best seams, slowest."""
 
 
 class MvsepConfig(BaseModel):
@@ -49,6 +51,17 @@ class MvsepConfig(BaseModel):
     output_format: int = 2  # 2 = FLAC 16-bit (smaller uploads/downloads than WAV)
     poll_seconds: float = 5.0
     timeout_minutes: float = 30.0
+
+
+class ModalConfig(BaseModel):
+    """Serverless GPU on modal.com for separation + alignment (compute = "modal")."""
+
+    gpu: str | list[str] = Field(default_factory=lambda: ["L4", "A10G", "T4"])
+    """GPU type, or a priority list Modal falls back through when the first is busy (a busy L4
+    queue was seen to add ~4 min to a cold start). L4 ~$0.80/h, A10G ~$1.10/h, T4 ~$0.59/h."""
+    scaledown_window: int = 120
+    """Seconds a GPU container stays warm after a call, so align reuses separate's container."""
+    timeout: int = 1200
 
 
 class LyricsConfig(BaseModel):
@@ -82,6 +95,16 @@ class AlignConfig(BaseModel):
     gap_close: float = 0.35
     """Gaps shorter than this between words in a line are closed so the wipe never stutters."""
     low_confidence: float = 0.35
+    """Lines whose mean word confidence is below this are flagged in `report` and the editor."""
+    low_word_confidence: float = 0.2
+    """...and so are lines with any single word below this. Calibrated on a real song: lines
+    with overlapping second voices scored 0.4-0.6 on average (unflagged) but had words at
+    0.01-0.19, while cleanly aligned lines never had a word below 0.29."""
+    silence_rel_db: float | None = 35.0
+    """Vocal activity = within this many dB of the stem's loud level. Word ends are stretched
+    through active audio (held notes) but never into silence. None = keep raw CTC spans."""
+    silence_hangover: float = 0.2
+    """Seconds of grace around vocal activity, so soft onsets and consonant tails still fit."""
 
 
 class DiarizeConfig(BaseModel):
@@ -130,6 +153,9 @@ class RenderConfig(BaseModel):
 class Config(BaseModel):
     library: Path = Path("~/deepcuts")
     language: str = "eng"
+    compute: Literal["local", "modal"] = "local"
+    """Where the GPU stages (separation, alignment) run. "modal" = serverless GPU on modal.com."""
+    modal: ModalConfig = Field(default_factory=ModalConfig)
     separation: SeparationConfig = Field(default_factory=SeparationConfig)
     mvsep: MvsepConfig = Field(default_factory=MvsepConfig)
     lyrics: LyricsConfig = Field(default_factory=LyricsConfig)

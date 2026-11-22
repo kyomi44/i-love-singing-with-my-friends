@@ -10,7 +10,8 @@ the whole point. The README has user docs, docs/ARCHITECTURE.md has design and s
 ```bash
 uv sync --extra dev                       # core + tests (no ML); enough for most work
 uv sync --extra separate --extra align    # + real separation and alignment (needs a GPU to be quick)
-uv run pytest                             # 44 tests; ffmpeg+libass and node are used when present
+uv sync --extra dev --extra modal         # or: run separation + alignment on Modal (no torch locally)
+uv run pytest                             # ffmpeg+libass and node are used when present
 uv run ruff check && uv run ruff format --check
 uv run deepcuts doctor                    # environment check
 ```
@@ -23,6 +24,10 @@ uv run deepcuts doctor                    # environment check
   `auto` strategy does a global pass, estimates the LRC→audio offset (`anchors.py`), then refines per line.
 - `stages/align/postprocess.py` is pure functions; `apply_overrides` is applied at render time, never baked
   into alignment.json.
+- `stages/align/activity.py`: vocal activity from the stem. ctc.py uses it to mask emissions in silence, clip
+  each anchored window at the next line's onset, and fit word spans (trim into singing, hold through notes).
+- `remote/`: `compute = "modal"`. `modal_app.py` is the GPU container (image from this repo's uv.lock + the local
+  package), `client.py` starts one ephemeral app per process and swaps in for the separation stage and the aligner.
 - `stages/render/layout.py::schedule` is mirrored in JS in `web/player.html` between `// <layout>` markers.
   `tests/test_editor_parity.py` runs both and compares. Change both together.
 
@@ -40,16 +45,33 @@ uv run deepcuts doctor                    # environment check
   (uv doesn't fork when a shared solution exists).
 - ffmpeg's `ass=` filter chokes on `:` and quotes in paths, so `render_video` runs ffmpeg with `cwd` = out dir.
 - Typer list options default to `[]`, so B006 is ignored for cli.py only. E501 is ignored (formatter owns length).
+- audio-separator 0.48 imports `onnxruntime` (only in its `[cpu]`/`[gpu]` extras) and `audioread` (undeclared),
+  so the `separate` extra lists both. torch 2.15 has no macOS 13 wheel: local ML on older Macs is out, use Modal.
+- The becruily karaoke model's own overlap is 8: 153 s for a 3-min song on an L4. `separation.overlap = 2` → 27 s,
+  stems within ~30 dB SDR. The vocal model was already at that speed.
+- ctc-forced-aligner `get_spans` pads each word halfway into neighbouring blanks. In "edges" mode (stars only at the
+  line edges) a soft held word got padded across an 8 s instrumental gap and scored ~0.97, which beat the honest
+  global result in `pick_best`. Switching the windows to "segment" stars made it worse (words jumped onto the next
+  line's onset). The fix that worked is activity.py: mask + window clip + fit. Don't trust confidence on long spans.
+- Modal: the GPU type is checked when the app starts, so it comes from env vars set before importing modal_app
+  (`with_options()` is too late). Any GPU needs a payment method on the account. Exceptions cross the wire by
+  pickle, so DeepcutsError subclasses with extra __init__ args need `__reduce__` (see MissingExtra).
+- `-v` only sets the `deepcuts` logger to DEBUG: root DEBUG made Modal's grpc/hpack layer log auth tokens.
+- Stage fingerprints cover inputs and config, not code. After changing stage code use `-f align` etc.
 
 ## Status and next steps
 
 - Done and tested: lyrics (LRCLIB, LRC/enhanced LRC, plain text with `@A/@B` duet tags), layout, ASS, video,
   caching, CLI, browser timing editor (verified in headless Chrome), and a full pipeline run with fake ML
   backends (`tests/test_pipeline_e2e.py`).
-- **Not yet run on real audio:** `stages/separate/local.py`, `stages/align/ctc.py`, `stages/diarize.py`,
-  `stages/separate/mvsep.py` (MVSEP's `files` response shape is undocumented; `_download` is defensive).
-  First job: run `deepcuts -v make <song>` on a real track on a GPU box and fix whatever breaks.
-- Then: tune `align.low_confidence` against real songs; CJK character mapping; party/TV mode; key shift.
+- Run on real audio (Nov 2026, Black Country, New Road "Salem Sisters", via Modal): `separate/local.py`,
+  `align/ctc.py`. A 3-min song takes ~2 min (separation ~80 s round trip, align ~20 s, render ~11 s).
+  Flagging = line mean < 0.35 or any word < 0.2: on that song it caught exactly the lines with overlapping voices.
+- **Not yet run on real audio:** `stages/diarize.py`, `stages/separate/mvsep.py` (MVSEP's `files` response shape
+  is undocumented; `_download` is defensive).
+- Next: overlapping second voices written as parentheticals. The karaoke model puts that voice on the backing stem,
+  so align the parenthetical words against `backing.wav` in the same window and render them as a second row
+  (layout.py + the JS mirror + ASS). Then more songs to calibrate the thresholds; CJK; party/TV mode; key shift.
 
 ## Conventions
 

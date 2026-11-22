@@ -45,6 +45,7 @@ class EditorApp:
                 "countdown_gap": rc.countdown_gap,
             },
             "low_confidence": self.cfg.align.low_confidence,
+            "low_word_confidence": self.cfg.align.low_word_confidence,
         }
 
     def rerender(self) -> str:

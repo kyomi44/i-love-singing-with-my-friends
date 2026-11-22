@@ -84,8 +84,21 @@ def get_backend(cfg: Config) -> Backend:
     return LocalBackend(cfg.separation)
 
 
+def make_karaoke(stems_dir: Path, instrumental: Path, backing: Path | None, cfg: Config) -> Path:
+    """The track you sing over: instrumental (+ backing vocals when backing = "keep")."""
+    karaoke = stems_dir / "karaoke.wav"
+    if cfg.separation.backing == "keep" and backing is not None:
+        return audio.mix([instrumental, backing], karaoke)
+    shutil.copy2(instrumental, karaoke)
+    return karaoke
+
+
 def run_separation(song: SongDir, cfg: Config) -> StemSet:
     sc = cfg.separation
+    if cfg.compute == "modal" and sc.backend == "local":
+        from deepcuts.remote.client import separate as separate_remote
+
+        return separate_remote(song, cfg)
     backend = get_backend(cfg)
     stems = song.stems_dir
     raw = stems / "_raw"
@@ -120,11 +133,7 @@ def run_separation(song: SongDir, cfg: Config) -> StemSet:
         backing = _canonical(bk, stems / "backing.wav")
         models.append(used)
 
-    if sc.backing == "keep" and backing is not None:
-        karaoke = audio.mix([instrumental, backing], stems / "karaoke.wav")
-    else:
-        karaoke = stems / "karaoke.wav"
-        shutil.copy2(instrumental, karaoke)
+    karaoke = make_karaoke(stems, instrumental, backing, cfg)
 
     shutil.rmtree(raw, ignore_errors=True)
     return StemSet(

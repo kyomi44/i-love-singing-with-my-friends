@@ -3,6 +3,12 @@
 
 library = "~/deepcuts"   # one folder per song lives here
 language = "eng"         # ISO 639-3 default for new songs (per-song: edit meta.json)
+compute = "local"        # where separation + alignment run: "local" or "modal" (serverless GPU)
+
+[modal]
+gpu = ["L4", "A10G", "T4"]   # first free one wins; ~$0.80 / $1.10 / $0.59 per hour, per second
+scaledown_window = 120   # seconds a container stays warm after a call
+timeout = 1200
 
 [separation]
 backend = "local"        # "local" (audio-separator) or "mvsep" (remote, needs MVSEP_API_TOKEN)
@@ -14,7 +20,7 @@ karaoke_models = [       # lead/backing split, tried in order until one loads
 ]
 backing = "keep"         # "keep" harmonies in the karaoke track, or "remove"
 model_dir = "~/.cache/deepcuts/models"
-# overlap = 2            # RoFormer overlap: 2 = faster, 8 = best seams
+overlap = 2              # RoFormer chunk overlap: 2 = fast (default), 8 = best seams (~5x slower)
 
 [mvsep]
 api_token_env = "MVSEP_API_TOKEN"
@@ -46,6 +52,9 @@ min_word_dur = 0.08
 max_word_dur = 6.0
 gap_close = 0.35         # close gaps shorter than this inside a line (smooth wipes)
 low_confidence = 0.35    # lines below this are flagged in `report` and the editor
+low_word_confidence = 0.2   # ...as are lines with any single word below this
+silence_rel_db = 35.0    # vocal activity threshold: words stretch through held notes, never silence
+silence_hangover = 0.2   # seconds of grace around vocal activity
 
 [diarize]
 enabled = false

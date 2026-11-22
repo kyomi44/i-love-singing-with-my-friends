@@ -59,6 +59,20 @@ uv run deepcuts make "https://artist.bandcamp.com/track/..." -a "Artist" -t "Tit
 
 Songs live in `~/deepcuts/<Artist - Title>/` (configurable). Play the `.mp4` on the TV however you already play YouTube: Chromecast, Plex, a USB stick, or a browser tab.
 
+## No GPU? Use Modal
+
+Separation and alignment can run on a serverless GPU at [Modal](https://modal.com). Everything else (lyrics, rendering, the editor) stays on your machine, and you don't install torch locally at all:
+
+```bash
+uv sync --extra modal
+uv run modal token new                 # once: log in in the browser
+uv run deepcuts make song.flac --compute modal
+```
+
+Or set `compute = "modal"` in your config to make it the default (`--compute local` overrides it per command). The first run builds the container image (a few minutes) and downloads the models into a Modal Volume. After that a song costs one container start plus about a minute of GPU time. GPUs are billed per second (L4 about $0.80/h; if no L4 is free it falls back to an A10G or T4, see `[modal] gpu`), so a song costs a few cents. Nothing runs, and nothing is billed, between songs.
+
+The container runs the same stage code from this repo's `uv.lock`, so local and remote results match.
+
 ## Fixing timing by ear
 
 ```bash
@@ -178,4 +192,6 @@ The code is MIT. Model weights carry their own licences. Notably, the default MM
 
 ## Status
 
-This is a scaffold. Everything outside the model calls is implemented and tested (lyrics, layout, ASS, video, caching, editor, CLI), including a full pipeline run with stand-in separator/aligner backends. The audio-separator and ctc-forced-aligner adapters were written against those libraries' current source (0.48 / 0.3) but haven't been run on real songs yet. Expect a tweak or two on your first GPU run, and `deepcuts -v make …` shows debug logs.
+Early but working. The full pipeline (local separation backend and CTC alignment, run on Modal) has been used on a real song end to end, and the first real run shaped the alignment logic: vocal-activity fitting and stricter low-confidence flagging. A 3-minute track takes about 2 minutes from file to video. Diarization and the MVSEP backend haven't been run on real audio yet. `deepcuts -v make …` shows debug logs, including timings from the Modal container.
+
+Known limit: lines where a second voice sings *over* the lead, written as parentheticals (`Happily (there's no use fearing…)`), are aligned as if sung one after the other, so their wipe is wrong. They're flagged in `deepcuts report`, so you can fix them in the editor. Doing it properly means aligning the parenthetical against the backing stem (the karaoke model already puts that voice there) and rendering it as a second row.

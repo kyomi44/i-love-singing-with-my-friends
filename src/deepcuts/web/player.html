@@ -114,7 +114,8 @@ function buildList() {
   lines.forEach((l, i) => {
     const li = document.createElement("li");
     const conf = l.words.reduce((a, w) => a + (w.confidence ?? 0), 0) / l.words.length;
-    if (conf < song.low_confidence) li.classList.add("low");
+    const worst = Math.min(...l.words.map((w) => w.confidence ?? 1));
+    if (conf < song.low_confidence || worst < (song.low_word_confidence ?? 0)) li.classList.add("low");
     li.innerHTML = `<span class="t"></span><span class="x"></span><span class="m"></span>`;
     li.querySelector(".x").textContent = (l.singer ? `@${l.singer} ` : "") + l.words.map((w) => w.text).join(" ");
     li.title = `aligner confidence ${(conf * 100).toFixed(0)}%`;

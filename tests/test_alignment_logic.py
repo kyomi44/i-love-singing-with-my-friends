@@ -1,3 +1,5 @@
+import pytest
+
 from deepcuts.config import AlignConfig
 from deepcuts.models import Line, Overrides, Word
 from deepcuts.stages.align.anchors import estimate_offset, line_windows, pick_best
@@ -125,3 +127,85 @@ def test_confidence_from_mean_logprob():
     assert abs(confidence(0.0) - 1.0) < 1e-9
     assert abs(confidence(-1.0) - 0.3679) < 1e-3
     assert 0 < confidence(-3.0) < 0.1
+
+
+def test_low_confidence_flags_a_single_very_weak_word():
+    # an overlapping second voice: decent mean, one word the aligner basically guessed
+    crammed = Line(words=[W("happily", 0, 1, 0.6), W("said)", 1, 1.01, 0.05), W("x", 1.1, 2, 0.7)])
+    clean = Line(words=[W("a", 0, 1, 0.9), W("b", 1, 2, 0.3)])
+    assert low_confidence([clean, crammed], 0.35) == []
+    [(i, mean)] = low_confidence([clean, crammed], 0.35, 0.2)
+    assert i == 1 and abs(mean - 0.45) < 1e-9
+
+
+def test_active_frames_threshold_follows_stem_loudness():
+    from deepcuts.stages.align.activity import active_frames
+
+    # 20 loud frames (-15 dB), 30 frames of digital silence, 20 loud frames again
+    levels = [-15.0] * 20 + [-120.0] * 30 + [-15.0] * 20
+    act = active_frames(levels, rel_db=35, hangover=0)
+    assert act == [True] * 20 + [False] * 30 + [True] * 20
+    # a quieter mix: the same shape 20 dB down is still detected the same way
+    assert active_frames([v - 20 for v in levels], rel_db=35, hangover=0) == act
+    # bleed far below the threshold never counts as singing
+    assert not any(active_frames([-80.0] * 50, rel_db=35, hangover=0))
+
+
+def test_active_frames_hangover_widens_both_sides():
+    from deepcuts.stages.align.activity import active_frames
+
+    levels = [-120.0] * 10 + [-10.0] * 5 + [-120.0] * 10 + [-10.0] * 50
+    act = active_frames(levels, rel_db=35, hangover=2)
+    assert act[:8] == [False] * 8 and act[8:10] == [True, True]  # opens 2 frames early
+    assert act[15:17] == [True, True] and act[17:23] == [False] * 6  # holds 2 frames late
+
+
+def _activity(spans, n=500, fs=0.02):
+    return [any(a <= f * fs < b for a, b in spans) for f in range(n)]
+
+
+def test_fit_to_activity_trims_padding_into_silence_and_holds_notes():
+    from deepcuts.stages.align.activity import fit_to_activity
+
+    fs = 0.02
+    active = _activity([(3.0, 4.2), (8.0, 9.0)])  # singing, 3.8 s of silence, singing
+    lines = [
+        # what edge-padded CTC produced on the real song: words stretched across the gap
+        Line(words=[W("bites", 3.0, 3.3, 0.7), W("at", 3.3, 5.9, 0.98), W("me", 5.9, 7.9, 0.97)]),
+        # tight global-pass spans: a held note shows up as a 40 ms burst
+        Line(words=[W("quail", 8.0, 8.04, 0.8)]),
+    ]
+    fit_to_activity(lines, active, fs)
+    bites, at, me = lines[0].words
+    assert bites.end == pytest.approx(3.3)  # already up against the next word
+    assert at.end == pytest.approx(4.2)  # trimmed back to where the singing stops
+    assert (me.start, me.end) == (5.9, 7.9)  # no singing in its span at all: left for review
+    assert lines[1].words[0].end == pytest.approx(9.0)  # held through the note
+
+
+def test_fit_to_activity_never_moves_words_on_a_silent_stem():
+    from deepcuts.stages.align.activity import fit_to_activity
+
+    lines = [Line(words=[W("ooh", 1.0, 2.0, 0.9)])]
+    fit_to_activity(lines, [False] * 200, 0.02)
+    assert (lines[0].words[0].start, lines[0].words[0].end) == (1.0, 2.0)
+
+
+def test_clip_at_next_onset_stops_window_before_next_line():
+    from deepcuts.stages.align.activity import clip_at_next_onset
+
+    fs = 0.02
+    # line A sung 59.9-64.2, silence, line B starts 72.64 (its anchor is 72.95)
+    active = _activity([(59.9, 64.2), (72.64, 80.0)], n=4500, fs=fs)
+    windows = [(59.5, 73.95), (72.35, 81.0)]
+    out = clip_at_next_onset(windows, [60.1, 72.95], active, fs)
+    assert out[0][0] == 59.5 and out[0][1] == pytest.approx(72.64, abs=fs)
+    assert out[1] == windows[1]  # last line: nothing after it
+
+
+def test_clip_at_next_onset_leaves_legato_lines_alone():
+    from deepcuts.stages.align.activity import clip_at_next_onset
+
+    active = _activity([(10.0, 30.0)], n=2000)  # continuous singing across the line change
+    windows = [(9.4, 21.0), (19.4, 31.0)]
+    assert clip_at_next_onset(windows, [10.0, 20.0], active, 0.02) == windows

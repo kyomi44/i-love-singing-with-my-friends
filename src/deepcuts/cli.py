@@ -45,6 +45,9 @@ ForceOpt = Annotated[
     ),
 ]
 SongArg = Annotated[str, typer.Argument(help="Song folder, or any unique part of its name.")]
+ComputeOpt = Annotated[
+    str | None, typer.Option("--compute", help="Where GPU stages run: local | modal.")
+]
 
 
 def _cfg(config: Path | None, **dotted: object) -> Config:
@@ -69,7 +72,7 @@ def _print_flagged(song: SongDir, cfg: Config) -> None:
     from deepcuts.stages.align.postprocess import low_confidence
 
     aln = song.load_alignment()
-    flagged = low_confidence(aln.lines, cfg.align.low_confidence)
+    flagged = low_confidence(aln.lines, cfg.align.low_confidence, cfg.align.low_word_confidence)
     if not flagged:
         out.print("[green]All lines aligned confidently.[/]")
         return
@@ -92,9 +95,11 @@ def main(
     verbose: Annotated[bool, typer.Option("--verbose", "-v", help="Debug logging.")] = False,
     version: Annotated[bool, typer.Option("--version", help="Show version and exit.")] = False,
 ) -> None:
-    logging.basicConfig(
-        level=logging.DEBUG if verbose else logging.WARNING, format="%(name)s: %(message)s"
-    )
+    # -v is for deepcuts' own logs. Third-party DEBUG logs are noise, and some leak secrets
+    # (Modal's grpc/hpack layer logs auth headers).
+    logging.basicConfig(level=logging.WARNING, format="%(name)s: %(message)s")
+    if verbose:
+        logging.getLogger("deepcuts").setLevel(logging.DEBUG)
     if version:
         out.print(f"deepcuts {__version__}")
         raise typer.Exit()
@@ -127,6 +132,7 @@ def make(
     no_video: Annotated[
         bool, typer.Option("--no-video", help="Only write .ass/.lrc/.json.")
     ] = False,
+    compute: ComputeOpt = None,
     force: ForceOpt = [],
     config: ConfigOpt = None,
 ) -> None:
@@ -134,6 +140,7 @@ def make(
     cfg = _cfg(
         config,
         language=language,
+        compute=compute,
         **{
             "separation.backing": backing,
             "separation.backend": separator,
@@ -173,9 +180,11 @@ def lyrics_cmd(
 
 
 @app.command()
-def separate(song: SongArg, force: ForceOpt = [], config: ConfigOpt = None) -> None:
+def separate(
+    song: SongArg, compute: ComputeOpt = None, force: ForceOpt = [], config: ConfigOpt = None
+) -> None:
     """(Re)run stem separation."""
-    cfg = _cfg(config)
+    cfg = _cfg(config, compute=compute)
     Pipeline(cfg, force, err).separate(_song(song, cfg))
 
 
@@ -185,11 +194,16 @@ def align(
     aligner: Annotated[str | None, typer.Option(help="ctc | whisperx")] = None,
     stem: Annotated[str | None, typer.Option(help="vocals | lead")] = None,
     strategy: Annotated[str | None, typer.Option(help="auto | global | anchored")] = None,
+    compute: ComputeOpt = None,
     force: ForceOpt = [],
     config: ConfigOpt = None,
 ) -> None:
     """(Re)align lyrics. Re-runs automatically when you edit the lyrics file."""
-    cfg = _cfg(config, **{"align.aligner": aligner, "align.stem": stem, "align.strategy": strategy})
+    cfg = _cfg(
+        config,
+        compute=compute,
+        **{"align.aligner": aligner, "align.stem": stem, "align.strategy": strategy},
+    )
     sd = _song(song, cfg)
     pipe = Pipeline(cfg, force, err)
     pipe.align(sd, _lyrics_or_die(pipe, sd), pipe.separate(sd))
@@ -368,6 +382,18 @@ def doctor(config: ConfigOpt = None) -> None:
                 f"${env}" + ("" if os.environ.get(env) else " not set (optional)"),
             )
         )
+    if cfg.compute == "modal" or importlib.util.find_spec("modal"):
+        has_modal = importlib.util.find_spec("modal") is not None
+        token = Path("~/.modal.toml").expanduser().exists() or bool(
+            os.environ.get("MODAL_TOKEN_ID")
+        )
+        gpu = cfg.modal.gpu if isinstance(cfg.modal.gpu, str) else " > ".join(cfg.modal.gpu)
+        detail = f"compute = {cfg.compute}, gpu = {gpu}"
+        if not has_modal:
+            detail += " (uv sync --extra modal)"
+        elif not token:
+            detail += " (run: uv run modal token new)"
+        rows.append(("modal", has_modal and token, detail))
     rows.append(("library", True, str(cfg.library_path)))
     table = Table(show_edge=False, show_header=False)
     for name, ok, detail in rows:

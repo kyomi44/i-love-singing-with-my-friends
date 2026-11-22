@@ -145,9 +145,14 @@ def apply_overrides(lines: list[Line], ov: Overrides) -> list[Line]:
     return lines
 
 
-def low_confidence(lines: list[Line], threshold: float) -> list[tuple[int, float]]:
-    return [
-        (i, line.confidence or 0.0)
-        for i, line in enumerate(lines)
-        if (line.confidence or 0.0) < threshold
-    ]
+def low_confidence(
+    lines: list[Line], threshold: float, word_threshold: float = 0.0
+) -> list[tuple[int, float]]:
+    """(index, mean confidence) of lines worth a listen: low mean, or any very weak word."""
+    out = []
+    for i, line in enumerate(lines):
+        confs = [w.confidence for w in line.words if w.confidence is not None]
+        mean = line.confidence or 0.0
+        if mean < threshold or (confs and min(confs) < word_threshold):
+            out.append((i, mean))
+    return out

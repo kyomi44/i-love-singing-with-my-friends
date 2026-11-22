@@ -228,5 +228,7 @@ class Pipeline:
         aln = self.align(song, lyrics, stems)
         self.diarize(song, stems)
         outputs = self.render(song, stems)
-        flagged = low_confidence(aln.lines, self.cfg.align.low_confidence)
+        flagged = low_confidence(
+            aln.lines, self.cfg.align.low_confidence, self.cfg.align.low_word_confidence
+        )
         return MakeResult(song=song, outputs=outputs, alignment=aln, flagged=flagged)

@@ -49,7 +49,12 @@ def alignment_stem(stems: StemSet, cfg: AlignConfig) -> Path:
 
 def run_alignment(meta: SongMeta, lyrics: Lyrics, stems: StemSet, cfg: Config) -> Alignment:
     stem = alignment_stem(stems, cfg.align)
-    aligner = get_aligner(cfg.align, resolve_device(cfg.align.device))
+    if cfg.compute == "modal":
+        from deepcuts.remote.client import RemoteAligner
+
+        aligner: Aligner = RemoteAligner(cfg)
+    else:
+        aligner = get_aligner(cfg.align, resolve_device(cfg.align.device))
     strategy = cfg.align.strategy
     if strategy != "global" and not lyrics.synced:
         strategy = "global"

@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import logging
+import time
 from pathlib import Path
 
 from deepcuts.config import SeparationConfig, expand
 from deepcuts.errors import MissingExtra
+
+log = logging.getLogger(__name__)
 
 # audio-separator's MDXC defaults (0.48: None = use the model's own setting); we only set `overlap`.
 DEFAULT_MDXC = {
@@ -25,7 +28,7 @@ class LocalBackend:
         try:
             from audio_separator.separator import Separator
         except ImportError as exc:
-            raise MissingExtra("separate", "audio-separator") from exc
+            raise MissingExtra("separate", "audio-separator", cause=str(exc)) from exc
         self._Separator = Separator
         self.cfg = cfg
 
@@ -41,8 +44,11 @@ class LocalBackend:
         }
         if self.cfg.overlap is not None:
             kwargs["mdxc_params"] = {**DEFAULT_MDXC, "overlap": self.cfg.overlap}
+        t0 = time.monotonic()
         sep = self._Separator(**kwargs)
         sep.load_model(model_filename=model)
+        t1 = time.monotonic()
         outputs = sep.separate(str(src), names) if names else sep.separate(str(src))
+        log.info("%s: load %.1fs, separate %.1fs", model, t1 - t0, time.monotonic() - t1)
         paths = [Path(p) if Path(p).is_absolute() else out_dir / p for p in outputs]
         return [p for p in paths if p.exists()]

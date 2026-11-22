@@ -16,8 +16,10 @@ dependencies = [
 
 [project.optional-dependencies]
 # Local stem separation (BS-/Mel-RoFormer, MDX, Demucs) via python-audio-separator.
-# GPU users: install "audio-separator[gpu]" instead (see README).
-separate = ["audio-separator>=0.30"]
+# audio-separator imports onnxruntime unconditionally but only installs it via its [cpu]/[gpu]
+# extras. RoFormer models run on torch (CUDA/MPS) either way; onnxruntime-gpu only speeds up MDX.
+# 0.48 also imports audioread without declaring it.
+separate = ["audio-separator[cpu]>=0.30", "audioread>=3.0"]
 # Default aligner: MMS CTC forced alignment of *known* lyrics against the vocal stem.
 align = [
   "torch>=2.3",
@@ -27,6 +29,8 @@ align = [
 diarize = ["pyannote.audio>=4.0"]
 # Pull audio from a URL (Bandcamp, YouTube, SoundCloud...).
 download = ["yt-dlp"]
+# Run separation + alignment on a serverless GPU at modal.com (compute = "modal").
+modal = ["modal>=1.0"]
 # Extra lyric providers (Musixmatch, NetEase, ...) on top of the built-in LRCLIB client.
 lyrics = ["syncedlyrics>=1.0"]
 all = ["deepcuts[separate,align,diarize,download,lyrics]"]
