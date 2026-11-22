@@ -58,6 +58,49 @@ pub fn wipe(words: &[Word], t: f64) -> Vec<Piece> {
     out
 }
 
+/// One character of a line with how much of it is sung (0..1), for the big-text wipe, which
+/// sweeps smoothly across each letter instead of jumping a whole letter at a time.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Letter {
+    pub ch: char,
+    pub sung: f64,
+    pub italic: bool,
+}
+
+pub fn letters(words: &[Word], t: f64) -> Vec<Letter> {
+    let mut out = Vec::new();
+    let mut in_paren = false;
+    for (i, w) in words.iter().enumerate() {
+        let italic = in_paren || w.text.starts_with('(');
+        let chars: Vec<char> = w.text.chars().collect();
+        let n = chars.len() as f64;
+        let progress = match (w.start, w.end) {
+            (Some(s), Some(e)) if e > s => ((t - s) / (e - s)).clamp(0.0, 1.0),
+            (Some(s), Some(_)) if t >= s => 1.0,
+            _ => 0.0,
+        };
+        for (k, ch) in chars.into_iter().enumerate() {
+            let sung = (progress * n - k as f64).clamp(0.0, 1.0);
+            out.push(Letter { ch, sung, italic });
+        }
+        if w.text.contains('(') {
+            in_paren = true;
+        }
+        if w.text.contains(')') {
+            in_paren = false;
+        }
+        if i + 1 < words.len() {
+            let next_started = words[i + 1].start.is_some_and(|s| t >= s);
+            out.push(Letter {
+                ch: ' ',
+                sung: if next_started { 1.0 } else { 0.0 },
+                italic: in_paren,
+            });
+        }
+    }
+    out
+}
+
 /// Lines on screen at `t`, as (row, line index), in row order.
 pub fn visible(lines: &[Line], t: f64) -> Vec<(u8, usize)> {
     let mut v: Vec<(u8, usize)> = lines
@@ -129,6 +172,18 @@ mod tests {
             vec![("Bites a", true), ("t me", false)]
         );
         assert_eq!(texts(&wipe(&words, 64.0)), vec![("Bites at me", true)]);
+    }
+
+    #[test]
+    fn letters_fill_smoothly_through_the_current_word() {
+        let words = vec![w("at", 0.0, 1.0), w("me", 1.0, 2.0)];
+        let l = letters(&words, 0.75); // 3/4 through "at": 'a' done, 't' half sung
+        let fill: Vec<(char, f64)> = l.iter().map(|x| (x.ch, x.sung)).collect();
+        assert_eq!(
+            fill,
+            vec![('a', 1.0), ('t', 0.5), (' ', 0.0), ('m', 0.0), ('e', 0.0)]
+        );
+        assert!(letters(&words, 2.0).iter().all(|x| x.sung == 1.0));
     }
 
     #[test]

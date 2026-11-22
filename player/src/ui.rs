@@ -8,8 +8,9 @@ use ratatui::{
     Frame,
 };
 
+use crate::bigtext;
 use crate::cover::{color, Cover};
-use crate::lyrics::{countdown, visible, wipe};
+use crate::lyrics::{countdown, letters, visible, wipe, Letter};
 use crate::song::Song;
 
 pub struct Look {
@@ -43,6 +44,7 @@ pub struct Status {
     pub duration: f64,
     pub ended: bool,
     pub flash: Option<String>,
+    pub size: u8,
 }
 
 fn mmss(t: f64) -> String {
@@ -124,7 +126,7 @@ pub fn draw_player(
     } else if t < song.intro_end() {
         draw_intro(f, mid, song, cover, look);
     } else {
-        draw_lyrics(f, mid, song, look, t);
+        draw_lyrics(f, mid, song, look, t, st.size);
     }
 
     let ratio = (t / st.duration.max(0.001)).clamp(0.0, 1.0);
@@ -144,8 +146,9 @@ pub fn draw_player(
             )),
         bar,
     );
-    let mut hint =
-        String::from(" space pause  ←/→ 5s  [/] line  r restart  +/- volume  ,/. sync  q quit");
+    let mut hint = String::from(
+        " space pause  ←/→ 5s  ↑/↓ size  [/] line  r restart  +/- volume  ,/. sync  q quit",
+    );
     if st.guide.is_some() {
         hint.push_str("  v guide vocals");
     }
@@ -199,12 +202,44 @@ fn draw_intro(f: &mut Frame, area: Rect, song: &Song, cover: Option<&mut Cover>,
     f.render_widget(Paragraph::new(text).alignment(Alignment::Center), below);
 }
 
-fn draw_lyrics(f: &mut Frame, area: Rect, song: &Song, look: &Look, t: f64) {
+/// Rows the lyrics area needs at a size: countdown + two lyric rows (each up to two wrapped
+/// lines) + a gap between them.
+fn block_height(size: u8) -> u16 {
+    let row = if size <= 1 {
+        2
+    } else {
+        2 * bigtext::dims(size).1
+    };
+    1 + row + 1 + row
+}
+
+/// The biggest size up to `want` that fits a lyrics area of `w` x `h` cells (at least 10
+/// letters a line). Depends only on the window, so it doesn't flicker as lines change.
+pub fn effective_size(w: u16, h: u16, want: u8) -> u8 {
+    (2..=want.min(bigtext::MAX_SIZE))
+        .rev()
+        .find(|&s| {
+            let (gw, _) = bigtext::dims(s);
+            block_height(s) <= h && w.saturating_sub(4) / gw >= 10
+        })
+        .unwrap_or(1)
+}
+
+/// Height in rows of the lyrics area (the player screen minus title, progress and keys).
+pub fn lyrics_area_height(screen_h: u16) -> u16 {
+    screen_h.saturating_sub(3)
+}
+
+fn draw_lyrics(f: &mut Frame, area: Rect, song: &Song, look: &Look, t: f64, want: u8) {
     let lines = &song.timing.lines;
     let t_words = t + song.lead();
-    // countdown, row 0 (up to 2 terminal lines), gap, row 1
-    let block_h = 1 + 2 + 1 + 2;
-    let y0 = area.y + area.height.saturating_sub(block_h) / 2;
+    let size = effective_size(area.width, area.height, want);
+    let row_h = if size <= 1 {
+        2
+    } else {
+        2 * bigtext::dims(size).1
+    };
+    let y0 = area.y + area.height.saturating_sub(block_height(size)) / 2;
     let rect = |dy: u16, h: u16| Rect {
         x: area.x + 2,
         y: y0 + dy,
@@ -223,6 +258,10 @@ fn draw_lyrics(f: &mut Frame, area: Rect, song: &Song, look: &Look, t: f64) {
     for (row, i) in visible(lines, t) {
         let line = &lines[i];
         let sung = look.sung(line.singer.as_deref());
+        let r = rect(if row == 0 { 1 } else { 2 + row_h }, row_h);
+        if size >= 2 && draw_big_line(f, r, &letters(&line.words, t_words), size, sung, look) {
+            continue;
+        }
         let spans: Vec<Span> = wipe(&line.words, t_words)
             .into_iter()
             .map(|p| {
@@ -237,14 +276,60 @@ fn draw_lyrics(f: &mut Frame, area: Rect, song: &Song, look: &Look, t: f64) {
                 Span::styled(p.text, s)
             })
             .collect();
-        let dy = if row == 0 { 1 } else { 4 };
+        let text_r = Rect {
+            y: r.y + r.height.saturating_sub(2) / 2,
+            height: 2,
+            ..r
+        };
         f.render_widget(
             Paragraph::new(TLine::from(spans))
                 .alignment(Alignment::Center)
                 .wrap(Wrap { trim: true }),
-            rect(dy, 2),
+            text_r,
         );
     }
+}
+
+/// Draw a line in block letters at the largest size <= `size` where it wraps to at most two
+/// lines, centred in `r`. False if even size 2 can't fit it (the caller falls back to text).
+fn draw_big_line(
+    f: &mut Frame,
+    r: Rect,
+    letters: &[Letter],
+    size: u8,
+    sung: Color,
+    look: &Look,
+) -> bool {
+    let chars: Vec<char> = letters.iter().map(|l| l.ch).collect();
+    let Some((s, parts)) = (2..=size).rev().find_map(|s| {
+        let (gw, _) = bigtext::dims(s);
+        let parts = bigtext::wrap(&chars, (r.width / gw) as usize);
+        (parts.len() <= 2).then_some((s, parts))
+    }) else {
+        return false;
+    };
+    let (gw, gh) = bigtext::dims(s);
+    let top = r.y + r.height.saturating_sub(parts.len() as u16 * gh) / 2;
+    let paren = look.rgb(0xB8B8C8); // unsung parentheticals: a softer white (no italics here)
+    let buf = f.buffer_mut();
+    for (n, &(a, b)) in parts.iter().enumerate() {
+        let width = (b - a) as u16 * gw;
+        let mut x = r.x + r.width.saturating_sub(width) / 2;
+        let y = top + n as u16 * gh;
+        for l in &letters[a..b] {
+            let unsung = if l.italic { paren } else { Color::White };
+            let style_at = |frac: f64| {
+                if frac < l.sung {
+                    Style::default().fg(sung)
+                } else {
+                    Style::default().fg(unsung)
+                }
+            };
+            bigtext::draw_glyph(buf, x, y, s, l.ch, &style_at);
+            x += gw;
+        }
+    }
+    true
 }
 
 pub fn draw_picker(

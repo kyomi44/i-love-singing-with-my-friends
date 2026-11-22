@@ -87,11 +87,14 @@ deepcuts-sing salem                  # or any unique part of its name
 |---|---|
 | `space` | pause / play |
 | `←` `→` | seek 5 s |
+| `↑` `↓` | lyrics size: 1 plain text, 2–4 big block letters (`--size 3` to start that way) |
 | `[` `]` | previous / next line (with a 1.5 s run-up) |
 | `v` | guide vocals on/off (the singer, quietly) |
 | `+` `-` | volume |
 | `,` `.` | lyrics 20 ms earlier / later, e.g. for Bluetooth latency (`--sync-ms 200` to start that way) |
 | `r` / `q` | restart / back to the list |
+
+Big lyrics are drawn with block characters, since a program can't change the terminal's font size (⌘+ / ⌘− in the terminal app still works too). A size that doesn't fit the window steps down, and a long line shrinks on its own rather than getting cut off. Size 4 needs a window about 37 rows tall.
 
 The lyrics follow the audio's own sample clock, so they can't drift from the music. Cover art is drawn in full colour on terminals with truecolor (iTerm2, Ghostty, WezTerm, kitty), and in 256 colours elsewhere (macOS Terminal). It reads `out/timing.json`, so re-render older songs once (`deepcuts render <song> --no-video`) to add the layout data it needs.
 

@@ -4,6 +4,7 @@
 //!     deepcuts-sing salem           # any unique part of a song folder's name, or a path
 
 mod audio;
+mod bigtext;
 mod cover;
 mod lyrics;
 mod song;
@@ -43,6 +44,9 @@ struct Args {
     /// Start with the guide vocal on.
     #[arg(long)]
     guide: bool,
+    /// Lyrics size, 1 (plain text) to 4 (huge block letters); ↑/↓ change it while playing.
+    #[arg(long, default_value_t = 1, value_parser = clap::value_parser!(u8).range(1..=4))]
+    size: u8,
     /// Starting volume in percent (0-150).
     #[arg(long, default_value_t = 100)]
     volume: u16,
@@ -130,6 +134,7 @@ fn play(terminal: &mut DefaultTerminal, song: Song, args: &Args, look: &Look) ->
     let mut player = Player::open(&song.karaoke(), song.vocals().as_deref(), args.silent)?;
     let mut cover = song.cover().and_then(|p| Cover::load(&p));
     let mut sync_ms = args.sync_ms;
+    let mut size = args.size;
     let mut flash: Option<(String, Instant)> = None;
     player.nudge_volume(args.volume.min(150) as f32 / 100.0 - 1.0);
     if args.guide && player.has_vocals() {
@@ -152,6 +157,7 @@ fn play(terminal: &mut DefaultTerminal, song: Song, args: &Args, look: &Look) ->
             sync_ms,
             duration,
             ended,
+            size,
             flash: flash
                 .as_ref()
                 .filter(|(_, at)| at.elapsed() < Duration::from_millis(1200))
@@ -187,6 +193,21 @@ fn play(terminal: &mut DefaultTerminal, song: Song, args: &Args, look: &Look) ->
             KeyCode::Char('r') => {
                 player.seek(0.0);
                 player.set_paused(false);
+            }
+            KeyCode::Up | KeyCode::Down => {
+                size = if k.code == KeyCode::Up {
+                    (size + 1).min(bigtext::MAX_SIZE)
+                } else {
+                    size.saturating_sub(1).max(1)
+                };
+                let screen = terminal.size()?;
+                let fits =
+                    ui::effective_size(screen.width, ui::lyrics_area_height(screen.height), size);
+                say(if fits < size {
+                    format!("lyrics size {size} (this window fits {fits}: make it bigger)")
+                } else {
+                    format!("lyrics size {size}")
+                });
             }
             KeyCode::Left => player.seek(t_audio - 5.0),
             KeyCode::Right => player.seek(t_audio + 5.0),
